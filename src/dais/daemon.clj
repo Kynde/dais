@@ -206,11 +206,12 @@
     [(execute-plan! ctx plan ids)]))
 
 (defn- route-opts [{:keys [config commands state]}]
-  {:strategy (get-in config [:router :strategy] :whole-match)
-   :prefix (get-in config [:router :prefix] "do")
-   :commands commands
-   :enter-mode (:enter-mode config :no-enter)
-   :armed (:armed @state)})
+  (let [st @state]
+    {:strategy (:strategy st :whole-match)
+     :prefix (get-in config [:router :prefix] "do")
+     :commands commands
+     :enter-mode (:enter-mode st :no-enter)
+     :armed (:armed st)}))
 
 (defn- handle-publish
   [{:keys [state] :as ctx} {:strs [event]}]
@@ -342,6 +343,46 @@
 
     {"ok" false "error" (str "Unknown target action: " (pr-str action))}))
 
+(def ^:private enter-mode-values #{"no-enter" "enter-auto" "enter-always"})
+(def ^:private strategy-values #{"whole-match" "prefix" "key-armed"})
+
+(defn- handle-settings
+  "Runtime toggles for the impulse knobs (session-only; config wins on
+  restart). Calibration settings (VAD tuning, idle timeout) deliberately stay
+  config-file only."
+  [{:keys [state runtime-dir config] :as ctx} {:strs [enter_mode strategy]}]
+  (cond
+    (and enter_mode (not (enter-mode-values enter_mode)))
+    {"ok" false "error" (str "Bad enter_mode " (pr-str enter_mode)
+                             " (no-enter | enter-auto | enter-always)")}
+
+    (and strategy (not (strategy-values strategy)))
+    {"ok" false "error" (str "Bad strategy " (pr-str strategy)
+                             " (whole-match | prefix | key-armed)")}
+
+    (not (or enter_mode strategy))
+    {"ok" false "error" "settings: nothing to set (enter_mode, strategy)"}
+
+    :else
+    (let [new-state (swap! state
+                           (fn [st]
+                             (cond-> st
+                               enter_mode (assoc :enter-mode (keyword enter_mode))
+                               strategy (assoc :strategy (keyword strategy)))))]
+      (state/write-files! runtime-dir new-state)
+      (record! ctx (daemon-event "control.state_changed"
+                                 {"via" "settings"
+                                  "enter_mode" (name (:enter-mode new-state))
+                                  "strategy" (name (:strategy new-state))}
+                                 nil))
+      (notify/notify! config "Dais settings"
+                      (str "enter: " (name (:enter-mode new-state))
+                           " · router: " (name (:strategy new-state)))
+                      {:icon "preferences-system" :urgency "low"})
+      {"ok" true
+       "enter_mode" (name (:enter-mode new-state))
+       "strategy" (name (:strategy new-state))})))
+
 (defn handle-request
   "Public for tests. Serialized: requests are quick and state transitions
   must not interleave."
@@ -351,9 +392,9 @@
       "publish" (handle-publish ctx req)
       "control" (handle-control ctx req)
       "target" (handle-target ctx req)
+      "settings" (handle-settings ctx req)
       "query" (case (get req "query")
-                "status" (let [st @state
-                               config (:config ctx)]
+                "status" (let [st @state]
                            {"ok" true "status" "running"
                             "execution" (if dry-run "dry-run" "live")
                             "mode" (name (:mode st))
@@ -361,8 +402,8 @@
                             "active_slot" (:active-slot st)
                             "target" (target-label st)
                             "ear_alive" (boolean (some-> (:ear ctx) deref ear/alive?))
-                            "strategy" (name (get-in config [:router :strategy] :whole-match))
-                            "enter_mode" (name (:enter-mode config :no-enter))
+                            "strategy" (name (:strategy st :whole-match))
+                            "enter_mode" (name (:enter-mode st :no-enter))
                             "sequence" (.get sequence-counter)
                             "events_dir" events-dir})
                 {"ok" false "error" (str "Unknown query: " (pr-str (get req "query")))})

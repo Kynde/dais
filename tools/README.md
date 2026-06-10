@@ -95,7 +95,11 @@ slots with the active one highlighted, the last utterances with their outcome
 utterances, words, drops, mean ASR latency) seeded from the event log.
 
 Control keys: `v` VAD toggle · `r` record latch · `Esc` send Escape ·
-`1`–`5` switch target · `a` arm · `q` quit.
+`1`–`5` switch target · `t` pane picker · `a` arm · `e` cycle enter-mode ·
+`s` cycle router strategy · `q` quit. The `e`/`s` toggles (also
+`dais-ctl set enter-mode ...` / `set strategy ...`) are **session-only** —
+a daemon restart returns to the config defaults; calibration knobs (VAD
+tuning, idle timeout) stay config-file only on purpose.
 
 Entirely optional: when no dais-top is connected the daemon broadcasts
 nothing and the ear skips level computation entirely (the daemon toggles the

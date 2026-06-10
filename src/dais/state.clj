@@ -18,6 +18,9 @@
    :speech false
    :targets (:targets config)
    :active-slot (:active-slot config 1)
+   ;; Runtime-togglable settings (session-only: config wins on restart).
+   :enter-mode (:enter-mode config :no-enter)
+   :strategy (get-in config [:router :strategy] :whole-match)
    :last-utterance nil})
 
 (defn active-target [state]
@@ -82,6 +85,8 @@
                "speech" (boolean (:speech state))
                "active_slot" (:active-slot state)
                "target" (target-label (active-target state))
+               "enter_mode" (name (:enter-mode state :no-enter))
+               "strategy" (name (:strategy state :whole-match))
                "last_utterance" (:last-utterance state)}))
     (let [marker (fn [fname on?]
                    (let [f (io/file dir fname)]

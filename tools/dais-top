@@ -357,7 +357,7 @@ function render() {
     ` · ${C.bold}${c.drops}${C.reset} drops · ${asr}` +
     `   ${C.dim}${S.strategy}/${S.enterMode}${C.reset}`);
   const noteStr = Date.now() < S.noteUntil ? `  ${C.yellow}${S.note}${C.reset}` : "";
-  lines.push(` ${C.dim}[v]ad  [r]ec  [Esc] esc  [1-5] target  [t] pick  [a]rm  [q]uit${C.reset}${noteStr}`);
+  lines.push(` ${C.dim}[v]ad [r]ec [Esc] esc [1-5] target [t] pick [a]rm [e]nter-mode [s]trategy [q]uit${C.reset}${noteStr}`);
 
   out.write(`${ESC}H${ESC}2J` + lines.slice(0, h).join("\n"));
 }
@@ -368,6 +368,12 @@ function describeTarget(t) {
 }
 
 // ---------- input ----------
+const ENTER_MODES = ["no-enter", "enter-auto", "enter-always"];
+const STRATEGIES = ["whole-match", "prefix", "key-armed"];
+function cycle(list, current) {
+  return list[(list.indexOf(current) + 1) % list.length];
+}
+
 function onKey(key) {
   if (key === "\x03") return shutdown();
   if (S.picker) return onPickerKey(key);
@@ -376,6 +382,13 @@ function onKey(key) {
   else if (key === "r") request({ op: "control", action: "toggle-record" }, ack("rec"));
   else if (key === "a") request({ op: "control", action: "arm" }, ack("armed"));
   else if (key === "t") openPicker();
+  else if (key === "e") {
+    const next = cycle(ENTER_MODES, S.enterMode);
+    request({ op: "settings", enter_mode: next }, ack(`enter: ${next}`));
+  } else if (key === "s") {
+    const next = cycle(STRATEGIES, S.strategy);
+    request({ op: "settings", strategy: next }, ack(`router: ${next}`));
+  }
   else if (key === "\x1b") request({ op: "control", action: "esc" }, ack("escape sent"));
   else if (/^[1-5]$/.test(key)) {
     request({ op: "target", action: "use", slot: Number(key) }, ack(`target ${key}`));
@@ -414,9 +427,12 @@ function ack(what) {
   return (resp) => {
     if (resp?.ok) note(what);
     else note(`✗ ${resp?.error ?? "failed"}`);
-    // refresh armed/slot quickly after a control
+    // refresh armed/slot/settings quickly after a control
     request({ op: "query", query: "status" }, (st) => {
-      if (st?.ok) { S.armed = st.armed; S.activeSlot = st.active_slot; S.mode = st.mode; }
+      if (st?.ok) {
+        S.armed = st.armed; S.activeSlot = st.active_slot; S.mode = st.mode;
+        S.enterMode = st.enter_mode; S.strategy = st.strategy;
+      }
     });
   };
 }

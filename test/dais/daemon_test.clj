@@ -178,6 +178,26 @@
         (daemon/check-idle! off-ctx)
         (is (= "vad-listening" (get (daemon/handle-request off-ctx {"op" "query" "query" "status"}) "mode")))))))
 
+(deftest runtime-settings
+  (testing "enter-mode change takes effect on routing immediately"
+    (is (false? (get-in (inject "run the tests, enter") ["plan" "submit"])))
+    (is (true? (get (req {"op" "settings" "enter_mode" "enter-auto"}) "ok")))
+    (is (= {"action" "type-text" "text" "run the tests" "submit" true}
+           (get (inject "run the tests, enter") "plan"))))
+  (testing "strategy change flips routing behavior"
+    (req {"op" "settings" "strategy" "prefix"})
+    (is (= "type-text" (get-in (inject "press enter") ["plan" "action"]))
+        "unprefixed command-looking text is dictation under :prefix")
+    (is (= "press-keys" (get-in (inject "do press enter") ["plan" "action"])))
+    (req {"op" "settings" "strategy" "whole-match"}))
+  (testing "status reflects runtime settings"
+    (let [st (req {"op" "query" "query" "status"})]
+      (is (= "enter-auto" (get st "enter_mode")))
+      (is (= "whole-match" (get st "strategy")))))
+  (testing "validation"
+    (is (false? (get (req {"op" "settings" "enter_mode" "bogus"}) "ok")))
+    (is (false? (get (req {"op" "settings"}) "ok")))))
+
 (deftest invalid-and-unknown
   (is (false? (get (req {"op" "publish" "event" {"type" "voice.transcript"}}) "ok")))
   (is (false? (get (req {"op" "nope"}) "ok")))
