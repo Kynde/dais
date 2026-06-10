@@ -12,8 +12,11 @@
     (when enabled
       (try
         (executor/run-proc
+         ;; suppress-sound: the mic must never hear our own notification chime
+         ;; (a VAD-start chime transcribes as "Hello!" — observed in trials).
          (cond-> [(or cmd "/usr/bin/notify-send") "-a" "dais"
-                  "-t" (str (or timeout-ms 2500)) summary]
+                  "-t" (str (or timeout-ms 2500))
+                  "-h" "boolean:suppress-sound:true" summary]
            body (conj body))
          {})
         (catch Exception _ nil)))))

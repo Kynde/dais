@@ -256,8 +256,15 @@ agent-pane send guard, per-utterance worker processes.
    once at startup, 1.4 s). Live acceptance: 3 s latch recording transcribed in ~1 s and
    routed to a type-text plan. Note for milestone 3: whisper hallucinated "Hello." from
    room noise — the no_speech_prob/min-duration mitigations are not optional.
-3. **VAD mode.** Silero streaming endpointing, `dais-vad` toggle, "voice off",
-   false-trigger mitigations, status events → `state.json` + notifications.
+3. **VAD mode.** ✓ done 2026-06-10. Streaming wrapper over the Silero v6 ONNX model
+   bundled with faster-whisper (no new deps), parec capture at 50 ms latency,
+   endpointing with pre-roll/hysteresis/max-length, ASR-queue thread shared with the
+   latch path. Gates: min voiced duration, no_speech_prob, avg_logprob — drops logged
+   as `asr.dropped` with the WAV kept. Live acceptance via espeak through speakers:
+   silence → nothing, "press enter" → Enter plan, "voice off" → mode off by voice.
+   Field finding: the daemon's own VAD-start notification chime transcribed as
+   "Hello!" — fixed with a startup-mute window + a suppress-sound notification hint.
+   Mic = system default source (internal Lunar Lake DMIC here); pin via `:asr :source`.
 4. **Polish.** Target slots + voice switching, `dais-esc`, `:enter-auto`, notification
    tuning, KDE `.desktop` files + shortcut binding notes.
 4b. **`:focus` backend.** ydotool setup contract is satisfied (see Executor section) —

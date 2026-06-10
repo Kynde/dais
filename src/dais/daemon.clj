@@ -320,11 +320,13 @@
           worker (ear/start!
                   {:cmd (get-in config [:ear :cmd])
                    :dir (get-in config [:ear :dir] "ear")
-                   :args ["--model" (:model asr "small.en")
-                          "--device" (:device asr "cpu")
-                          "--compute-type" (:compute-type asr "int8")
-                          "--language" (:language asr "en")
-                          "--audio-dir" audio-dir]}
+                   :args (cond-> ["--model" (:model asr "small.en")
+                                  "--device" (:device asr "cpu")
+                                  "--compute-type" (:compute-type asr "int8")
+                                  "--language" (:language asr "en")
+                                  "--audio-dir" audio-dir
+                                  "--tuning" (json/write-str (or (:vad config) {}))]
+                           (:source asr) (into ["--source" (:source asr)]))}
                   #(on-ear-event ctx %))]
       (reset! (:ear ctx) worker)
       worker)))

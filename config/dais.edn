@@ -32,4 +32,17 @@
  :ear {:enabled? true
        :cmd ["/home/k/bin/pixi" "run" "-q" "ear"]
        :dir "ear"}
- :asr {:model "small.en" :device "cpu" :compute-type "int8" :language "en"}}
+ ;; :source pins a PipeWire input node (`pactl list sources short`);
+ ;; omit it to follow the system default source (headset plug/unplug works).
+ :asr {:model "small.en" :device "cpu" :compute-type "int8" :language "en"}
+
+ ;; VAD endpointing + false-trigger gates (JSON-serialized to the ear's
+ ;; --tuning; underscore keys match the worker's DEFAULT_TUNING).
+ :vad {"threshold" 0.5
+       "release" 0.35
+       "min_speech_ms" 300
+       "silence_ms" 700
+       "pre_roll_ms" 300
+       "max_utterance_s" 30
+       "no_speech_prob_max" 0.7
+       "avg_logprob_min" -1.2}}
