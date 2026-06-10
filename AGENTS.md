@@ -1,8 +1,13 @@
 # Working on dais
 
 Read `ai/` first (`ai/gotchas.md` especially) — it holds the non-obvious,
-hard-won facts. `FABLE_PLAN.md` is the design ground truth; if code and plan
-disagree, flag it rather than silently "fixing" either.
+hard-won facts. Two kinds of truth with different rules:
+
+- `ai/` is **descriptive** (facts about the system): when it disagrees with
+  the code, the code wins and the `ai/` file gets fixed.
+- `FABLE_PLAN.md` is **normative** (the agreed design): when the code drifts
+  from it, that's a decision, not a typo — flag it to the user rather than
+  silently "fixing" either side.
 
 ## Build & test
 

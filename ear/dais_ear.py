@@ -264,7 +264,18 @@ class VadStream(threading.Thread):
                     finish("max-length")
 
         if in_speech:
-            finish("capture-stopped")
+            if self.stopping:
+                # Off means OFF: a deliberate stop (F9/voice-off mid-speech)
+                # DISCARDS the partial utterance — transcribing it could type
+                # or press keys after the user said stop. Only an unexpected
+                # capture death keeps what was heard.
+                emit("asr.speech_end",
+                     {"voiced_ms": voiced * CHUNK_MS, "reason": "stopped"},
+                     self.ear.args.model)
+                emit("asr.dropped", {"reason": "vad stopped mid-utterance"},
+                     self.ear.args.model)
+            else:
+                finish("capture-stopped")
         if self.proc is not None:
             self.proc.terminate()
         log("vad stream stopped")

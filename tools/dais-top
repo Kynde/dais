@@ -327,7 +327,7 @@ function render() {
       const cur = i === pk.idx;
       const mark = p.agent ? `${C.green}★${C.reset}` : " ";
       const slot = p.slot != null ? ` ${C.cyan}=slot ${p.slot}${C.reset}` : "";
-      const path = (p.path ?? "").replace(process.env.HOME ?? " ", "~");
+      const path = tilde(p.path ?? "");
       const row = ` ${mark} ${p.pane}  ${C.dim}[${p.command}]${C.reset} ${C.dim}${truncate(path, 30)}${C.reset}${slot}`;
       lines.push(cur ? `${ESC}7m${row}${C.reset}` : row);
     });
@@ -365,6 +365,11 @@ function render() {
 function describeTarget(t) {
   if (!t) return "?";
   return t.type === "focus" ? "focus" : t.pane ?? "?";
+}
+
+function tilde(p) {
+  const h = process.env.HOME;
+  return h && p.startsWith(h) ? "~" + p.slice(h.length) : p;
 }
 
 // ---------- input ----------
