@@ -49,11 +49,13 @@
                        :parent-id parent-id
                        :payload payload})))
 
-(defn- mode-label [st]
+(defn- mode-notification
+  "[summary icon] for the state-change notification."
+  [st]
   (case (:mode st)
-    :off "voice off"
-    :vad-listening "VAD listening"
-    :manual-recording "recording"))
+    :off ["Voice off" "microphone-sensitivity-muted"]
+    :vad-listening ["Listening" "audio-input-microphone"]
+    :manual-recording ["Recording" "media-record"]))
 
 (defn- target-label [st]
   (let [t (state/active-target st)]
@@ -79,7 +81,7 @@
   (let [old-mode (:mode @state)
         res (f @state)]
     (if-let [err (:error res)]
-      (do (notify/notify! config "dais" err)
+      (do (notify/notify! config "Dais" err {:icon "dialog-warning"})
           {"ok" false "error" err})
       (let [new-state (:state res)]
         (reset! state new-state)
@@ -87,8 +89,10 @@
         (when-let [msg (ear/ear-message old-mode (:mode new-state) via)]
           (when-let [e (some-> (:ear ctx) deref)]
             (ear/send! e msg)))
-        (notify/notify! config "dais" (str (mode-label new-state)
-                                           " · target " (target-label new-state)))
+        (let [[label icon] (mode-notification new-state)]
+          (notify/notify! config label
+                          (str "Target: " (target-label new-state))
+                          {:icon icon :urgency "low"}))
         {"ok" true
          "event" (daemon-event "control.state_changed"
                                {"via" via
@@ -114,7 +118,8 @@
         result (executor/execute plan target config {:dry-run dry-run})
         ok? (= "ok" (get result "result"))]
     (when-not ok?
-      (notify/notify! config "dais error" (get result "error")))
+      (notify/notify! config "Dais error" (get result "error")
+                      {:icon "dialog-error"}))
     (daemon-event (if ok? "action.executed" "action.error")
                   (assoc result "plan" (plan->json plan))
                   ids)))
@@ -302,8 +307,10 @@
       (locking handler-lock
         (log/append! events-dir (with-sequence ev))
         (case t
-          "asr.ready" (notify/notify! config "dais" "ear ready (model loaded)")
-          "asr.error" (notify/notify! config "dais error" (get-in ev ["payload" "error"]))
+          "asr.ready" (notify/notify! config "Dais ready" "Speech model loaded"
+                                      {:icon "audio-input-microphone" :urgency "low"})
+          "asr.error" (notify/notify! config "Dais error" (get-in ev ["payload" "error"])
+                                      {:icon "dialog-error"})
           nil))
       ;; Unknown types are logged if they carry a valid envelope, else dropped.
       (when (event/valid-envelope? ev)

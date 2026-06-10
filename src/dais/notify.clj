@@ -6,8 +6,9 @@
 
 (defn notify!
   "Fire-and-forget notification. Failures are swallowed — feedback must never
-  break the pipeline."
-  [config summary & [body]]
+  break the pipeline. opts: :icon (freedesktop icon name), :urgency
+  (low/normal/critical — state flips are :low so they stay subtle)."
+  [config summary body & [{:keys [icon urgency]}]]
   (let [{:keys [enabled timeout-ms cmd]} (:notifications config)]
     (when enabled
       (try
@@ -16,7 +17,10 @@
          ;; (a VAD-start chime transcribes as "Hello!" — observed in trials).
          (cond-> [(or cmd "/usr/bin/notify-send") "-a" "dais"
                   "-t" (str (or timeout-ms 2500))
-                  "-h" "boolean:suppress-sound:true" summary]
+                  "-h" "boolean:suppress-sound:true"]
+           icon (into ["-i" icon])
+           urgency (into ["-u" urgency])
+           true (conj summary)
            body (conj body))
          {})
         (catch Exception _ nil)))))
