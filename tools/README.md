@@ -65,6 +65,43 @@ tools/dais-ctl off                       # force voice off
 tools/dais-ctl shutdown                  # stop the daemon (cleans up socket/markers)
 ```
 
+## Voice commands
+
+Daemon controls (work in every router strategy):
+
+| Say | Effect |
+|------|---------|
+| "voice off" / "dais off" | stop listening (in-flight latch recording is discarded) |
+| "next target" | cycle target slot |
+| "target two" (one–five, ordinals, digits) | switch slot |
+
+Built-in whole-utterance commands:
+
+| Say | Effect |
+|------|---------|
+| "scratch that" | `C-u` — clear the input line |
+| "cancel" / "stop" | `Escape` |
+| "yes" / "no" | type `yes`/`no` + Enter |
+
+Key presses: trigger verb (*press/hit/push/choose/select/pick/answer*) + keys;
+fillers (*the/a/and/then/option/number/key/button*) ignored; max 5 keys.
+Keys: *enter, return, escape, esc, up, down, left, right, tab, backspace*,
+*one–nine* / *first–ninth* / digits, *control|ctrl + a c d k u w*.
+
+```text
+"press enter"                      -> Enter
+"choose option two"                -> 2
+"select the third option"          -> 3
+"press down and enter"             -> Down Enter
+"press control a then control k"   -> C-a C-k (clear the line)
+```
+
+Every non-filler word must map to a key, or the utterance is dictation —
+"select the right abstraction for this" types as text. Everything that isn't
+a command is dictation: typed as one line, never submitted (`:no-enter`; with
+`:enter-auto` a trailing spoken "enter" submits). Add your own commands in
+`config/dais.edn` under `:router :commands`.
+
 ## Statusline integration
 
 `$XDG_RUNTIME_DIR/dais/` holds `state.json` plus marker files meant for
