@@ -265,8 +265,12 @@ agent-pane send guard, per-utterance worker processes.
    Field finding: the daemon's own VAD-start notification chime transcribed as
    "Hello!" — fixed with a startup-mute window + a suppress-sound notification hint.
    Mic = system default source (internal Lunar Lake DMIC here); pin via `:asr :source`.
-4. **Polish.** Target slots + voice switching, `dais-esc`, `:enter-auto`, notification
-   tuning, KDE `.desktop` files + shortcut binding notes.
+4. **Polish.** ✓ done 2026-06-10. Target slots + voice switching, `dais-esc`,
+   `:enter-auto`, notification tuning all landed with milestones 1–3; this milestone
+   added `tools/kde/*.desktop` (symlinked into `~/.local/share/applications/`) and a
+   systemd user unit (`tools/dais.service`, enabled — logs via
+   `journalctl --user -u dais`). Key binding itself is manual: System Settings →
+   Keyboard → Shortcuts, bind F9/F10/F11 to the three dais launchers.
 4b. **`:focus` backend.** ydotool setup contract is satisfied (see Executor section) —
    ungated. Backend implementation + `focus` as a target-slot value + interactive
    throughput check. Independent of milestones 2–4 (executor-side only).
