@@ -3,6 +3,7 @@ events/
 .clj-kondo/.cache/
 .lsp/.cache/
 ear/.pixi/
+__pycache__/
 node_modules/
 *.wav
 .claude/
