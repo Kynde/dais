@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=dais record latch
+Comment=Toggle the dais manual record latch (F10)
+Exec=/home/k/dais/tools/dais-rec
+Icon=media-record
+Terminal=false
+Categories=Utility;

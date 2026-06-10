@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=dais VAD toggle
+Comment=Toggle the dais voice-control VAD session (F9)
+Exec=/home/k/dais/tools/dais-vad
+Icon=audio-input-microphone
+Terminal=false
+Categories=Utility;

@@ -1,0 +1,15 @@
+[Unit]
+Description=dais voice-control daemon
+# PipeWire provides the mic; the ear worker reconnects fine either way.
+After=pipewire.service
+
+[Service]
+Type=simple
+WorkingDirectory=/home/k/dais
+ExecStart=/usr/local/bin/clojure -M:daemon
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=10
+
+[Install]
+WantedBy=default.target

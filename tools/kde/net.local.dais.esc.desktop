@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=dais escape
+Comment=Send Escape to the active dais target (F11)
+Exec=/home/k/dais/tools/dais-esc
+Icon=process-stop
+Terminal=false
+Categories=Utility;
