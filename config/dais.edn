@@ -7,7 +7,10 @@
           ;; Extra whole-utterance commands (merged over built-in defaults).
           ;; Entries map a phrase to either {:keys [...]} (key sequence) or
           ;; {:text "..." :submit true/false} (typed reply).
-          :commands {}}
+          :commands
+          {"send the brief"
+           {:text "Voice input notice: parts of my input arrive via speech-to-text and may contain recognition errors or noise. Read /home/k/dais/BRIEF.md for how to cope (verify unclear intent, match dictated identifiers against the repo, ignore noise fragments, prefer numbered options)."
+            :submit false}}}
 
  ;; Dictation submit behavior: :no-enter | :enter-auto | :enter-always
  :enter-mode :no-enter
