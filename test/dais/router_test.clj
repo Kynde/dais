@@ -22,6 +22,14 @@
            (route "press down and enter")))
     (is (= {:action :press-keys :keys ["Down" "Down" "Enter"]}
            (route "press down down then enter"))))
+  (testing "control chords"
+    (is (= {:action :press-keys :keys ["C-a"]} (route "press control a")))
+    (is (= {:action :press-keys :keys ["C-k"]} (route "press control k")))
+    (is (= {:action :press-keys :keys ["C-w"]} (route "hit ctrl w")))
+    (is (= {:action :press-keys :keys ["C-a" "C-k"]}
+           (route "press control a then control k")))
+    (testing "unpaired control falls through to dictation"
+      (is (= :type-text (:action (route "press control to the tower"))))))
   (testing "every-token rule: trigger verb alone does not make a command"
     (is (= :type-text (:action (route "select the right abstraction for this"))))
     (is (= :type-text (:action (route "press on with the refactoring"))))))

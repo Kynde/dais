@@ -52,14 +52,32 @@
       (str/replace #"[^a-z0-9]+" " ")
       str/trim))
 
+(def ^:private ctrl-letters
+  "Letters pronounceable after control/ctrl, limited to the executor's
+  whitelisted C-* chords."
+  {"a" "C-a" "c" "C-c" "d" "C-d" "k" "C-k" "u" "C-u" "w" "C-w"})
+
+(defn- pair-ctrl
+  "Fold [\"control\" \"a\"] / [\"ctrl\" \"w\"] token pairs into C-* key tokens.
+  Runs BEFORE filler removal — \"a\" is a filler word and would vanish."
+  [tokens]
+  (loop [ts tokens out []]
+    (cond
+      (empty? ts) out
+      (and (#{"control" "ctrl"} (first ts)) (ctrl-letters (second ts)))
+      (recur (drop 2 ts) (conj out (ctrl-letters (second ts))))
+      :else (recur (rest ts) (conj out (first ts))))))
+
 (defn keypress-request
   "When the WHOLE normalized utterance is a key-press instruction, return the
   ordered key names (capped at 5), else nil."
   [norm]
   (when (re-find keypress-trigger-re norm)
-    (let [tokens (str/split norm #" +")
+    (let [tokens (pair-ctrl (str/split norm #" +"))
           remaining (remove keypress-fillers tokens)
-          keys* (mapv (fn [w] (or (key-words w) (when (re-matches #"[1-9]" w) w)))
+          keys* (mapv (fn [w] (or (key-words w)
+                                  (when (re-matches #"C-[a-z]" w) w)
+                                  (when (re-matches #"[1-9]" w) w)))
                       remaining)]
       (when (and (seq keys*)
                  (<= (count keys*) 5)

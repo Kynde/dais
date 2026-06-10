@@ -65,7 +65,14 @@
 (deftest focus-chords-press-then-release-reversed
   (let [steps (would-run (dry {:action :press-keys :keys ["C-c"]} focus-target))]
     (is (= ["/usr/bin/ydotool" "key" "29:1" "46:1" "46:0" "29:0"]
-           (get (first steps) "argv")))))
+           (get (first steps) "argv"))))
+  (testing "line-editing chords"
+    (let [steps (would-run (dry {:action :press-keys :keys ["C-a" "C-k"]} focus-target))]
+      (is (= ["/usr/bin/ydotool" "key"
+              "29:1" "30:1" "30:0" "29:0"
+              "29:1" "37:1" "37:0" "29:0"]
+             (get (first steps) "argv"))))
+    (is (= "ok" (get (dry {:action :press-keys :keys ["C-w"]} tmux-target) "result")))))
 
 (deftest no-target
   (let [res (executor/execute {:action :press-keys :keys ["Enter"]} nil config {:dry-run true})]

@@ -22,7 +22,7 @@
 (def allowed-key-names
   "The only key names a press-keys plan may deliver."
   (into #{"Enter" "Escape" "Up" "Down" "Left" "Right" "Tab" "BSpace"
-          "C-c" "C-d" "C-u"}
+          "C-a" "C-c" "C-d" "C-k" "C-u" "C-w"}
         (map str (range 1 10))))
 
 (def ^:private focus-keycodes
@@ -30,7 +30,8 @@
   entry is a chord: press in order, release in reverse."
   (merge {"Enter" [28] "Escape" [1] "Tab" [15] "BSpace" [14]
           "Up" [103] "Down" [108] "Left" [105] "Right" [106]
-          "C-c" [29 46] "C-d" [29 32] "C-u" [29 22]}
+          "C-a" [29 30] "C-c" [29 46] "C-d" [29 32]
+          "C-k" [29 37] "C-u" [29 22] "C-w" [29 17]}
          ;; KEY_1..KEY_9 are keycodes 2..10
          (into {} (map (fn [n] [(str n) [(inc n)]]) (range 1 10)))))
 
