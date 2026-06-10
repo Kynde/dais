@@ -270,8 +270,12 @@ function render() {
   const lines = [];
 
   // header
+  const activeT = S.targets[S.activeSlot];
   const targetStr = S.activeSlot != null
-    ? `target ${C.bold}[${S.activeSlot}]${C.reset} ${describeTarget(S.targets[S.activeSlot])}`
+    ? `target ${C.bold}[${S.activeSlot}]${C.reset} ` +
+      (activeT?.alive === false
+        ? `${C.red}${describeTarget(activeT)} ✗ gone${C.reset}`
+        : describeTarget(activeT))
     : "no target";
   const right = `${S.earAlive ? C.green + "ear ✓" : C.red + "ear ✗"}${C.reset}  ` +
     `${S.armed ? C.yellow + "ARMED" : C.dim + "armed –"}${C.reset}  ` +
@@ -296,12 +300,17 @@ function render() {
   }
   lines.push(sep);
 
-  // targets
+  // targets — ✗ marks a target that cannot be delivered to right now
+  // (tmux pane gone / ydotoold socket missing); liveness comes from the
+  // periodic target-list poll.
   const slots = Object.keys(S.targets).sort();
   const tgts = slots.map((k) => {
+    const t = S.targets[k];
     const active = String(S.activeSlot) === k;
-    const label = `${k} ${describeTarget(S.targets[k])}`;
-    return active ? `${C.bold}${C.cyan}[${label}]${C.reset}` : `${C.dim} ${label} ${C.reset}`;
+    const dead = t?.alive === false;
+    const label = `${k} ${describeTarget(t)}${dead ? " ✗" : ""}`;
+    const col = dead ? C.red : active ? C.cyan : C.dim;
+    return active ? `${C.bold}${col}[${label}]${C.reset}` : `${col} ${label} ${C.reset}`;
   });
   lines.push(` targets  ${tgts.join("  ") || C.dim + "none configured" + C.reset}`);
   lines.push(sep);
@@ -439,6 +448,15 @@ function main() {
   out.on("resize", render);
   connect();
   setInterval(render, 100);
+  // Modest liveness poll: refresh target slots (incl. alive flags) while
+  // connected. Only runs while dais-top itself runs — daemon stays idle
+  // otherwise.
+  setInterval(() => {
+    if (!S.connected) return;
+    request({ op: "target", action: "list" }, (tg) => {
+      if (tg?.ok) { S.targets = tg.targets ?? {}; S.activeSlot = tg.active_slot; }
+    });
+  }, 1500);
 }
 
 main();

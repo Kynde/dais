@@ -264,6 +264,15 @@
 
     {"ok" false "error" (str "Unknown control action: " (pr-str action))}))
 
+(defn- target-alive?
+  "Can this target be delivered to right now? tmux: the pane resolves;
+  focus: the ydotoold socket exists."
+  [config t]
+  (case (:type t)
+    :tmux (executor/pane-exists? config (:pane t))
+    :focus (.exists (io/file (config/ydotool-socket config)))
+    false))
+
 (defn- parse-target-value
   "\"focus\" -> focus target; \"current\" -> the active tmux pane;
   \"session:window.pane\" -> tmux target. Returns {:target t} or {:error e}."
@@ -302,10 +311,14 @@
         (dissoc res "event")))
 
     "list"
+    ;; Includes per-target liveness — dais-top polls this (~1/s while open),
+    ;; so the check stays request-driven: no polling when no UI is watching.
     (let [st @state]
       {"ok" true
        "active_slot" (:active-slot st)
-       "targets" (into {} (map (fn [[k v]] [(str k) (target->json v)])
+       "targets" (into {} (map (fn [[k v]]
+                                 [(str k) (assoc (target->json v)
+                                                 "alive" (target-alive? config v))])
                                (:targets st)))})
 
     "panes"

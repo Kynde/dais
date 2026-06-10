@@ -11,7 +11,8 @@
              2 {:type :focus}}
    :active-slot 1
    :tmux ["tmux" "-L" "dais-test-never-running"]
-   :focus {:ydotool ["/usr/bin/ydotool"]}
+   :focus {:ydotool ["/usr/bin/ydotool"]
+           :ydotool-socket "/tmp/dais-test-nope.sock"}
    :notifications {:enabled false}})
 
 (def ^:dynamic *ctx* nil)
@@ -82,7 +83,10 @@
   (is (true? (get (req {"op" "target" "action" "use" "slot" 2}) "ok")))
   (let [listing (req {"op" "target" "action" "list"})]
     (is (= 2 (get listing "active_slot")))
-    (is (= {"type" "focus"} (get-in listing ["targets" "2"]))))
+    (is (= {"type" "focus" "alive" false} (get-in listing ["targets" "2"]))
+        "focus liveness = ydotoold socket existence (test config points nowhere)")
+    (is (= false (get-in listing ["targets" "1" "alive"]))
+        "tmux liveness = pane resolves (scratch server has no panes)"))
   (testing "bad target value"
     (is (false? (get (req {"op" "target" "action" "set" "slot" 1 "pane" "garbage"}) "ok"))))
   (testing "voice next target cycles"
@@ -144,7 +148,8 @@
           listing (daemon/handle-request ctx2 {"op" "target" "action" "list"})]
       (is (= 3 (get listing "active_slot")) "active slot restored")
       (is (= {"type" "tmux" "pane" "work:claude.0"}
-             (get-in listing ["targets" "3"])) "picked target restored"))))
+             (dissoc (get-in listing ["targets" "3"]) "alive"))
+          "picked target restored"))))
 
 (deftest panes-listing-fails-safe-without-tmux
   ;; scratch server name has no server: the op reports an error, never guesses
