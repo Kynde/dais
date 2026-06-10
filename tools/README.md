@@ -29,6 +29,14 @@ tools/dais-ctl inject please review PR 123   # dictation -> type-text, no submit
 tools/dais-ctl inject voice off              # voice control of the daemon itself
 ```
 
+Brief a fresh agent session about voice input (delivers a pointer to
+`BRIEF.md` into the target — the agent reads the file itself; `--full` pastes
+the whole text for targets without file access). Then say "press enter":
+
+```sh
+tools/dais-ctl brief
+```
+
 Real dictation via the latch (speak between the two `rec` calls):
 
 ```sh

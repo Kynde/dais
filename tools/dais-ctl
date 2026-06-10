@@ -4,6 +4,9 @@
 // Usage:
 //   dais-ctl status
 //   dais-ctl inject <text...>      feed a fake transcript into the router
+//   dais-ctl brief [--full]        deliver the voice-input briefing to the
+//                                  target: a pointer to BRIEF.md (default)
+//                                  or its full text (--full)
 //   dais-ctl vad                   toggle the VAD session       (F9)
 //   dais-ctl rec                   toggle the manual latch      (F10)
 //   dais-ctl esc                   send Escape to the target    (F11)
@@ -51,6 +54,29 @@ function buildRequest(argv) {
           type: "voice.transcript",
           source: { module: "dais-ctl", provider: "inject" },
           payload: { text: rest.join(" ") },
+        },
+      };
+    }
+    case "brief": {
+      const fs = require("node:fs");
+      const path = require("node:path");
+      const briefPath = path.resolve(__dirname, "..", "BRIEF.md");
+      const text =
+        rest[0] === "--full"
+          ? fs.readFileSync(briefPath, "utf8")
+          : `Voice input notice: parts of my input arrive via speech-to-text and may ` +
+            `contain recognition errors or noise. Read ${briefPath} for how to cope ` +
+            `(verify unclear intent, match dictated identifiers against the repo, ` +
+            `ignore noise fragments, prefer numbered options).`;
+      return {
+        op: "publish",
+        event: {
+          schema: "dais.event.v1",
+          id: randomUUID(),
+          time: new Date().toISOString(),
+          type: "voice.transcript",
+          source: { module: "dais-ctl", provider: "brief" },
+          payload: { text },
         },
       };
     }
