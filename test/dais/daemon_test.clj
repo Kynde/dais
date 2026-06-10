@@ -130,6 +130,28 @@
     (is (re-find #"action\.executed" (str sub)))
     (daemon/unsubscribe! *ctx* sub)))
 
+(deftest picked-targets-survive-restart
+  (let [state-dir (tmp-dir "dais-statedir")
+        mk #(daemon/make-ctx {:config config
+                              :events-dir (tmp-dir "dais-events")
+                              :runtime-dir (tmp-dir "dais-runtime")
+                              :state-dir state-dir
+                              :dry-run true})
+        ctx1 (mk)]
+    (daemon/handle-request ctx1 {"op" "target" "action" "set" "slot" 3 "pane" "work:claude.0"})
+    (daemon/handle-request ctx1 {"op" "target" "action" "use" "slot" 3})
+    (let [ctx2 (mk)
+          listing (daemon/handle-request ctx2 {"op" "target" "action" "list"})]
+      (is (= 3 (get listing "active_slot")) "active slot restored")
+      (is (= {"type" "tmux" "pane" "work:claude.0"}
+             (get-in listing ["targets" "3"])) "picked target restored"))))
+
+(deftest panes-listing-fails-safe-without-tmux
+  ;; scratch server name has no server: the op reports an error, never guesses
+  (let [resp (req {"op" "target" "action" "panes"})]
+    (is (false? (get resp "ok")))
+    (is (re-find #"tmux" (get resp "error")))))
+
 (deftest invalid-and-unknown
   (is (false? (get (req {"op" "publish" "event" {"type" "voice.transcript"}}) "ok")))
   (is (false? (get (req {"op" "nope"}) "ok")))

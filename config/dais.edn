@@ -15,7 +15,8 @@
  ;; Target slots. :type :tmux needs :pane "session:window.pane";
  ;; :type :focus delivers to the focused app via ydotool.
  :targets {1 {:type :focus}
-           2 {:type :tmux :pane "main:0.0"}}
+           2 {:type :tmux :pane "app:claude.0"}
+           3 {:type :tmux :pane "system:claude.0"}}
  :active-slot 1
 
  :tmux ["tmux"]

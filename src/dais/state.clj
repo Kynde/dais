@@ -6,6 +6,7 @@
   success or {:error \"...\"} on refusal. The daemon owns the atom and the
   file writes."
   (:require [clojure.data.json :as json]
+            [clojure.edn :as edn]
             [clojure.java.io :as io]))
 
 (defn initial-state
@@ -94,3 +95,27 @@
   [dir]
   (doseq [fname ["mic-recording" "speech-detected"]]
     (io/delete-file (io/file dir fname) true)))
+
+;; --- durable target persistence ---
+;; Picked targets survive daemon restarts: config/dais.edn holds the
+;; hand-written defaults, targets.edn (under ~/.local/state/dais) overlays
+;; whatever was last picked via CLI/voice/TUI.
+
+(defn save-targets!
+  [state-dir state]
+  (let [f (io/file state-dir "targets.edn")]
+    (io/make-parents f)
+    (spit f (pr-str {:targets (:targets state)
+                     :active-slot (:active-slot state)}))))
+
+(defn load-targets
+  "Persisted {:targets :active-slot} overlay, or nil. A corrupt/absent file
+  silently yields nil (config defaults win)."
+  [state-dir]
+  (let [f (io/file state-dir "targets.edn")]
+    (when (.exists f)
+      (try
+        (let [{:keys [targets active-slot] :as m} (edn/read-string (slurp f))]
+          (when (and (map? targets) (get targets active-slot))
+            m))
+        (catch Exception _ nil)))))

@@ -121,15 +121,22 @@
   return {\"ok\" true \"event\" <control.state_changed>}. On refusal: notify
   the error and return {\"ok\" false ...}. Callers hold handler-lock, so
   read-transition-write is not racy."
-  [{:keys [state runtime-dir config] :as ctx} f via ids]
-  (let [old-mode (:mode @state)
-        res (f @state)]
+  [{:keys [state runtime-dir state-dir config] :as ctx} f via ids]
+  (let [old @state
+        old-mode (:mode old)
+        res (f old)]
     (if-let [err (:error res)]
       (do (notify/notify! config "Dais" err {:icon "dialog-warning"})
           {"ok" false "error" err})
       (let [new-state (:state res)]
         (reset! state new-state)
         (state/write-files! runtime-dir new-state)
+        ;; Picked targets are durable: persist on any targets/slot change so a
+        ;; daemon restart keeps what was last chosen (config holds defaults).
+        (when (and state-dir
+                   (or (not= (:targets old) (:targets new-state))
+                       (not= (:active-slot old) (:active-slot new-state))))
+          (state/save-targets! state-dir new-state))
         (when-let [msg (ear/ear-message old-mode (:mode new-state) via)]
           (when-let [e (some-> (:ear ctx) deref)]
             (ear/send! e msg)))
@@ -297,6 +304,25 @@
        "targets" (into {} (map (fn [[k v]] [(str k) (target->json v)])
                                (:targets st)))})
 
+    "panes"
+    (if-let [panes (executor/list-all-panes config)]
+      (let [st @state
+            assigned (into {} (for [[slot t] (:targets st)
+                                    :when (:pane t)]
+                                [(:pane t) slot]))]
+        {"ok" true
+         "active_slot" (:active-slot st)
+         "panes" (mapv (fn [{:keys [pane command path]}]
+                         (cond-> {"pane" pane
+                                  "command" command
+                                  "path" path}
+                           (assigned pane) (assoc "slot" (assigned pane))
+                           (executor/agent-commands
+                            (str/lower-case (or command "")))
+                           (assoc "agent" true)))
+                       panes)})
+      {"ok" false "error" "Could not list tmux panes (is tmux running?)"})
+
     {"ok" false "error" (str "Unknown target action: " (pr-str action))}))
 
 (defn handle-request
@@ -328,15 +354,18 @@
       {"ok" false "error" (str "Unknown op: " (pr-str (get req "op")))})))
 
 (defn make-ctx
-  "Assemble the daemon context. Public for tests."
-  [{:keys [config events-dir runtime-dir dry-run]}]
+  "Assemble the daemon context. Public for tests. Persisted targets (from
+  :state-dir, when given) overlay the config defaults."
+  [{:keys [config events-dir runtime-dir state-dir dry-run]}]
   {:config config
    :commands (router/merged-commands (get-in config [:router :commands]))
-   :state (atom (state/initial-state config))
+   :state (atom (merge (state/initial-state config)
+                       (when state-dir (state/load-targets state-dir))))
    :ear (atom nil)
    :subscribers (atom #{})
    :events-dir events-dir
    :runtime-dir runtime-dir
+   :state-dir state-dir
    :dry-run (boolean dry-run)})
 
 (defn- on-ear-event
@@ -440,7 +469,9 @@
         events-dir (or events-dir (config/events-dir cfg))
         runtime-dir (config/runtime-dir)
         ctx (make-ctx {:config cfg :events-dir events-dir
-                       :runtime-dir runtime-dir :dry-run dry-run})]
+                       :runtime-dir runtime-dir
+                       :state-dir (config/state-dir)
+                       :dry-run dry-run})]
     (Files/createDirectories (.getParent (Path/of socket-path (make-array String 0)))
                              (make-array java.nio.file.attribute.FileAttribute 0))
     (delete-if-exists socket-path)

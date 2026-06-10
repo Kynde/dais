@@ -50,6 +50,7 @@ const S = {
   peakAt: 0,
   transcribing: false,
   heard: [],              // {time, text, outcome, drop, trace}
+  picker: null,           // {panes, idx, awaitSlot} while the t-overlay is open
   flashUntil: 0,
   counters: { listenMs: 0, utterances: 0, words: 0, drops: 0, asrMsSum: 0, asrN: 0 },
   note: "",               // transient footer note
@@ -305,20 +306,37 @@ function render() {
   lines.push(` targets  ${tgts.join("  ") || C.dim + "none configured" + C.reset}`);
   lines.push(sep);
 
-  // heard list
-  lines.push(` ${C.bold}heard${C.reset}`);
-  const heardRows = Math.max(3, h - lines.length - 4);
-  const flash = Date.now() < S.flashUntil;
-  S.heard.slice(0, heardRows).forEach((e, i) => {
-    if (e.drop) {
-      lines.push(`  ${C.dim}${e.time}${C.reset}  ${C.red}✗${C.reset} ${C.dim}dropped: ${e.drop}` +
-        (e.text ? ` (“${truncate(e.text, 24)}”)` : "") + C.reset);
-    } else {
-      const hl = i === 0 && flash ? C.green : "";
-      lines.push(`  ${C.dim}${e.time}${C.reset}  ${hl}${truncate(e.text, w - 30)}${C.reset} ` +
-        `${C.cyan}${e.outcome ?? ""}${C.reset}`);
-    }
-  });
+  // heard list — or the pane picker overlay while open
+  if (S.picker) {
+    const pk = S.picker;
+    const head = pk.awaitSlot
+      ? `${C.yellow}assign ${C.bold}${pk.panes[pk.idx]?.pane}${C.reset}${C.yellow} to which slot? [1-5]${C.reset}`
+      : `${C.dim}↑/↓ choose · Enter assign · Esc cancel${C.reset}`;
+    lines.push(` ${C.bold}pick target pane${C.reset}   ${head}`);
+    const rows = Math.max(3, h - lines.length - 4);
+    pk.panes.slice(0, rows).forEach((p, i) => {
+      const cur = i === pk.idx;
+      const mark = p.agent ? `${C.green}★${C.reset}` : " ";
+      const slot = p.slot != null ? ` ${C.cyan}=slot ${p.slot}${C.reset}` : "";
+      const path = (p.path ?? "").replace(process.env.HOME ?? " ", "~");
+      const row = ` ${mark} ${p.pane}  ${C.dim}[${p.command}]${C.reset} ${C.dim}${truncate(path, 30)}${C.reset}${slot}`;
+      lines.push(cur ? `${ESC}7m${row}${C.reset}` : row);
+    });
+  } else {
+    lines.push(` ${C.bold}heard${C.reset}`);
+    const heardRows = Math.max(3, h - lines.length - 4);
+    const flash = Date.now() < S.flashUntil;
+    S.heard.slice(0, heardRows).forEach((e, i) => {
+      if (e.drop) {
+        lines.push(`  ${C.dim}${e.time}${C.reset}  ${C.red}✗${C.reset} ${C.dim}dropped: ${e.drop}` +
+          (e.text ? ` (“${truncate(e.text, 24)}”)` : "") + C.reset);
+      } else {
+        const hl = i === 0 && flash ? C.green : "";
+        lines.push(`  ${C.dim}${e.time}${C.reset}  ${hl}${truncate(e.text, w - 30)}${C.reset} ` +
+          `${C.cyan}${e.outcome ?? ""}${C.reset}`);
+      }
+    });
+  }
   while (lines.length < h - 3) lines.push("");
 
   // counters + footer
@@ -330,7 +348,7 @@ function render() {
     ` · ${C.bold}${c.drops}${C.reset} drops · ${asr}` +
     `   ${C.dim}${S.strategy}/${S.enterMode}${C.reset}`);
   const noteStr = Date.now() < S.noteUntil ? `  ${C.yellow}${S.note}${C.reset}` : "";
-  lines.push(` ${C.dim}[v]ad  [r]ec  [Esc] esc  [1-5] target  [a]rm  [q]uit${C.reset}${noteStr}`);
+  lines.push(` ${C.dim}[v]ad  [r]ec  [Esc] esc  [1-5] target  [t] pick  [a]rm  [q]uit${C.reset}${noteStr}`);
 
   out.write(`${ESC}H${ESC}2J` + lines.slice(0, h).join("\n"));
 }
@@ -342,14 +360,46 @@ function describeTarget(t) {
 
 // ---------- input ----------
 function onKey(key) {
-  if (key === "q" || key === "\x03") return shutdown();
+  if (key === "\x03") return shutdown();
+  if (S.picker) return onPickerKey(key);
+  if (key === "q") return shutdown();
   if (key === "v") request({ op: "control", action: "toggle-vad" }, ack("vad"));
   else if (key === "r") request({ op: "control", action: "toggle-record" }, ack("rec"));
   else if (key === "a") request({ op: "control", action: "arm" }, ack("armed"));
+  else if (key === "t") openPicker();
   else if (key === "\x1b") request({ op: "control", action: "esc" }, ack("escape sent"));
   else if (/^[1-5]$/.test(key)) {
     request({ op: "target", action: "use", slot: Number(key) }, ack(`target ${key}`));
   }
+}
+
+function openPicker() {
+  request({ op: "target", action: "panes" }, (resp) => {
+    if (!resp?.ok) return note(`✗ ${resp?.error ?? "no panes"}`);
+    S.picker = { panes: resp.panes, idx: 0, awaitSlot: false };
+  });
+}
+
+function onPickerKey(key) {
+  const pk = S.picker;
+  if (key === "\x1b" || key === "q" || key === "t") { S.picker = null; return; }
+  if (pk.awaitSlot) {
+    if (/^[1-5]$/.test(key)) {
+      const pane = pk.panes[pk.idx]?.pane;
+      S.picker = null;
+      request({ op: "target", action: "set", slot: Number(key), pane },
+        ack(`slot ${key} → ${pane}`));
+      request({ op: "target", action: "list" }, (tg) => {
+        if (tg?.ok) { S.targets = tg.targets ?? {}; S.activeSlot = tg.active_slot; }
+      });
+    } else {
+      pk.awaitSlot = false;
+    }
+    return;
+  }
+  if (key === "\x1b[A" || key === "k") pk.idx = Math.max(0, pk.idx - 1);
+  else if (key === "\x1b[B" || key === "j") pk.idx = Math.min(pk.panes.length - 1, pk.idx + 1);
+  else if (key === "\r" || key === "\n") pk.awaitSlot = pk.panes.length > 0;
 }
 function ack(what) {
   return (resp) => {

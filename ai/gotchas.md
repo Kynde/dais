@@ -18,3 +18,4 @@ kglobalaccel has no key-release events :: push-to-talk is impossible via KDE sho
 KDE/systemd exec env has no user PATH :: node comes from fnm (interactive zsh only) and pixi lives in ~/bin — KDE-bound tools are sh+socat with absolute paths; dais-ctl (node) is NOT safely KDE-bindable; config uses /home/k/bin/pixi absolutely.
 testing against the live daemon types into the user's focused window :: default target slot is :focus and the systemd daemon runs LIVE; use a private dry-run daemon (see AGENTS.md) or point a slot at a scratch tmux pane first.
 whisper model cache is shared :: ~/.cache/huggingface (shared with ../lausu); warm load ~1s, cold load downloads the model.
+picked targets shadow config wholesale :: once any target is picked, ~/.local/state/dais/targets.edn overlays BOTH :targets and :active-slot at startup — editing :targets in config/dais.edn has no effect until that file is deleted.

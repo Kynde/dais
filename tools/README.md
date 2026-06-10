@@ -51,11 +51,18 @@ Targets (slot 1/2/... are defined in config/dais.edn and adjustable live):
 
 ```sh
 tools/dais-ctl target list
-tools/dais-ctl target set 2 work:1.0     # a tmux pane
+tools/dais-ctl target set 2 app:claude.0 # a tmux pane (window NAMES work too)
 tools/dais-ctl target set 1 focus        # the focused app (ydotool)
 tools/dais-ctl target set 3 current      # grab the active tmux pane
 tools/dais-ctl target use 2              # switch; or say "target two"
+tools/dais-ctl target panes              # all panes, agents ★, slots annotated
+tools/dais-ctl target pick [slot]        # fzf-pick a pane (default: active slot)
 ```
+
+In dais-top, `t` opens the same picker as an overlay (↑/↓, Enter, then the
+slot digit). Picked targets are **durable**: the daemon persists them to
+`~/.local/state/dais/targets.edn` and they override the `config/dais.edn`
+defaults on restart — delete that file to return to config defaults.
 
 Debugging a miss:
 

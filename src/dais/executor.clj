@@ -98,6 +98,28 @@
                                      {})]
     (when (zero? exit) (not-empty (str/trim out)))))
 
+(def agent-commands
+  "Pane process names that look like coding agents — used only to ANNOTATE
+  the pane picker (the send guard was deliberately not ported; see plan)."
+  #{"claude" "codex" "copilot" "omp" "pi"})
+
+(defn list-all-panes
+  "Every pane across all sessions, window-NAME based specs (stable under
+  reordering, matches the user's name-based targets). nil when tmux is
+  unreachable."
+  [config]
+  (let [{:keys [exit out]} (run-proc (into (tmux-prefix config)
+                                           ["list-panes" "-a" "-F"
+                                            (str "#{session_name}:#{window_name}.#{pane_index}"
+                                                 "\t#{pane_current_command}"
+                                                 "\t#{pane_current_path}")])
+                                     {})]
+    (when (zero? exit)
+      (vec (for [line (str/split-lines out)
+                 :when (not (str/blank? line))
+                 :let [[pane cmd path] (str/split line #"\t" 3)]]
+             {:pane pane :command cmd :path path})))))
+
 (defn- tmux-type-plan [config pane text submit?]
   (let [prefix (tmux-prefix config)
         buffer (str "dais-" (UUID/randomUUID))]

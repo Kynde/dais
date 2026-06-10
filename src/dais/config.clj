@@ -23,6 +23,12 @@
   [config]
   (or (:events-dir config) (System/getenv "DAIS_EVENTS_DIR") "events"))
 
+(defn state-dir
+  "Durable state (picked targets) — survives reboot, unlike runtime-dir."
+  []
+  (or (System/getenv "DAIS_STATE_DIR")
+      (str (System/getProperty "user.home") "/.local/state/dais")))
+
 (defn ydotool-socket
   "Socket path for the ydotoold user daemon (the client default unless
   configured). Set explicitly on the subprocess env — never inherited from an

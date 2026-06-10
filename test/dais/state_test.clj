@@ -56,6 +56,22 @@
              (get-in (:state (state/set-target st 3 {:type :tmux :pane "x:0.0"}))
                      [:targets 3]))))))
 
+(deftest target-persistence
+  (let [dir (str (System/getProperty "java.io.tmpdir") "/dais-targets-test-" (random-uuid))
+        st (-> (state/initial-state config)
+               (assoc-in [:targets 3] {:type :tmux :pane "x:y.0"})
+               (assoc :active-slot 3))]
+    (testing "round-trip"
+      (state/save-targets! dir st)
+      (is (= {:targets (:targets st) :active-slot 3} (state/load-targets dir))))
+    (testing "missing file yields nil"
+      (is (nil? (state/load-targets (str dir "-nope")))))
+    (testing "corrupt or inconsistent file yields nil (config defaults win)"
+      (spit (str dir "/targets.edn") "{:garbage")
+      (is (nil? (state/load-targets dir)))
+      (spit (str dir "/targets.edn") (pr-str {:targets {1 {:type :focus}} :active-slot 9}))
+      (is (nil? (state/load-targets dir))))))
+
 (deftest state-files
   (let [dir (str (System/getProperty "java.io.tmpdir") "/dais-state-test-" (random-uuid))
         st (assoc (state/initial-state config) :mode :vad-listening :speech true)]
