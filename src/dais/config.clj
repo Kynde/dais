@@ -44,7 +44,8 @@
    :active-slot 1
    :tmux ["tmux"]
    :focus {:ydotool ["/usr/bin/ydotool"] :key-delay-ms 2}
-   :notifications {:enabled true :timeout-ms 2500}})
+   :notifications {:enabled true :timeout-ms 2500}
+   :vad-idle-off-min 5})
 
 (defn- deep-merge [a b]
   (if (and (map? a) (map? b)) (merge-with deep-merge a b) b))

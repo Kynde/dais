@@ -28,6 +28,10 @@
 
  :notifications {:enabled true :timeout-ms 2500}
 
+ ;; Mic hygiene: force voice-off after a VAD session hears nothing for this
+ ;; many minutes (decimals ok, nil/0 disables).
+ :vad-idle-off-min 5
+
  ;; The resident ear worker (capture/VAD/ASR). :cmd is absolute so a
  ;; systemd/KDE-launched daemon needs no user PATH.
  :ear {:enabled? true

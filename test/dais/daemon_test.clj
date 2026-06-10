@@ -152,6 +152,27 @@
     (is (false? (get resp "ok")))
     (is (re-find #"tmux" (get resp "error")))))
 
+(deftest idle-timeout-closes-vad-session
+  (let [ctx (assoc *ctx* :config (assoc config :vad-idle-off-min 0.001))] ; 60ms
+    (daemon/handle-request ctx {"op" "control" "action" "toggle-vad"})
+    (testing "recent activity: no-op"
+      (daemon/check-idle! ctx)
+      (is (= "vad-listening" (get (daemon/handle-request ctx {"op" "query" "query" "status"}) "mode"))))
+    (testing "stale activity: forced off, logged as idle-timeout"
+      (reset! (:last-heard ctx) (- (System/currentTimeMillis) 1000))
+      (daemon/check-idle! ctx)
+      (is (= "off" (get (daemon/handle-request ctx {"op" "query" "query" "status"}) "mode")))
+      (is (some #(and (= "control.state_changed" (get % "type"))
+                      (= "idle-timeout" (get-in % ["payload" "via"])))
+                (get (daemon/handle-request ctx {"op" "events" "last" 10}) "events"))))
+    (testing "no-op outside vad mode and when disabled"
+      (daemon/check-idle! ctx)
+      (let [off-ctx (assoc ctx :config (assoc config :vad-idle-off-min nil))]
+        (daemon/handle-request off-ctx {"op" "control" "action" "toggle-vad"})
+        (reset! (:last-heard off-ctx) 0)
+        (daemon/check-idle! off-ctx)
+        (is (= "vad-listening" (get (daemon/handle-request off-ctx {"op" "query" "query" "status"}) "mode")))))))
+
 (deftest invalid-and-unknown
   (is (false? (get (req {"op" "publish" "event" {"type" "voice.transcript"}}) "ok")))
   (is (false? (get (req {"op" "nope"}) "ok")))

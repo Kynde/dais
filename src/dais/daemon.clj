@@ -137,6 +137,10 @@
                    (or (not= (:targets old) (:targets new-state))
                        (not= (:active-slot old) (:active-slot new-state))))
           (state/save-targets! state-dir new-state))
+        ;; A fresh VAD session starts its idle clock now.
+        (when (and (= :vad-listening (:mode new-state))
+                   (not= :vad-listening old-mode))
+          (some-> (:last-heard ctx) (reset! (System/currentTimeMillis))))
         (when-let [msg (ear/ear-message old-mode (:mode new-state) via)]
           (when-let [e (some-> (:ear ctx) deref)]
             (ear/send! e msg)))
@@ -363,6 +367,7 @@
                        (when state-dir (state/load-targets state-dir))))
    :ear (atom nil)
    :subscribers (atom #{})
+   :last-heard (atom (System/currentTimeMillis))
    :events-dir events-dir
    :runtime-dir runtime-dir
    :state-dir state-dir
@@ -378,10 +383,13 @@
       ;; Meter events: ephemeral by design — broadcast to subscribers only,
       ;; never logged, no sequence (would flood the audit log at ~8 Hz).
       "asr.level" (broadcast! ctx ev)
-      "voice.transcript" (handle-request ctx {"op" "publish" "event" ev})
-      ("asr.speech_start" "asr.speech_end")
+      "voice.transcript" (do (some-> (:last-heard ctx) (reset! (System/currentTimeMillis)))
+                             (handle-request ctx {"op" "publish" "event" ev}))
+      ("asr.speech_start" "asr.speech_end" "asr.dropped")
       (locking handler-lock
-        (swap! state assoc :speech (= t "asr.speech_start"))
+        (some-> (:last-heard ctx) (reset! (System/currentTimeMillis)))
+        (when (not= t "asr.dropped")
+          (swap! state assoc :speech (= t "asr.speech_start")))
         (write-state! ctx)
         (record! ctx (with-sequence ev)))
       ("asr.ready" "asr.listening" "asr.error")
@@ -401,6 +409,26 @@
       (when (event/valid-envelope? ev)
         (locking handler-lock
           (record! ctx (with-sequence ev)))))))
+
+(defn check-idle!
+  "Force voice-off when a VAD session has heard nothing (no speech start, no
+  transcript, not even a gated drop) for :vad-idle-off-min minutes. Mic
+  hygiene: an open mic should not stay open forever unattended. nil/0
+  disables. Called by the watchdog thread; public for tests."
+  [{:keys [state config last-heard] :as ctx}]
+  (let [timeout-min (:vad-idle-off-min config)]
+    (when (and timeout-min (pos? timeout-min) last-heard
+               (= :vad-listening (:mode @state))
+               (> (- (System/currentTimeMillis) @last-heard)
+                  (long (* timeout-min 60000))))
+      (locking handler-lock
+        (when (= :vad-listening (:mode @state)) ; re-check under the lock
+          (let [res (transition! ctx state/voice-off "idle-timeout" nil)]
+            (when-let [ev (get res "event")]
+              (record! ctx ev))
+            (notify/notify! config "Voice off"
+                            (str "idle for " timeout-min " min")
+                            {:icon "microphone-sensitivity-muted"})))))))
 
 (defn start-ear!
   "Spawn the ear worker per config (:ear {:enabled? :cmd :dir}) and wire its
@@ -477,6 +505,13 @@
     (delete-if-exists socket-path)
     (write-state! ctx)
     (start-ear! ctx)
+    (doto (Thread. (fn [] (loop []
+                            (Thread/sleep 15000)
+                            (try (check-idle! ctx) (catch Exception _))
+                            (recur)))
+                   "dais-idle-watchdog")
+      (.setDaemon true)
+      (.start))
     (let [server (ServerSocketChannel/open StandardProtocolFamily/UNIX)]
       (.bind server (UnixDomainSocketAddress/of socket-path))
       (.addShutdownHook (Runtime/getRuntime)
