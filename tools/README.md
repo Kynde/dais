@@ -8,6 +8,7 @@ executing, `--no-ear` to skip the audio worker).
 | Tool | Purpose |
 |------|---------|
 | `dais-ctl` | Full verb set (node). Status, inject, targets, events, replay. |
+| `dais-top` | Live TUI cockpit: mode, mic level meter, heard-list, counters, targets. |
 | `dais-vad` | Toggle the VAD session. Bind to **F9**. |
 | `dais-rec` | Toggle the manual record latch. Bind to **F10**. |
 | `dais-esc` | Send Escape to the active target immediately. Bind to **F11**. |
@@ -72,6 +73,26 @@ tools/dais-ctl arm
 tools/dais-ctl off                       # force voice off
 tools/dais-ctl shutdown                  # stop the daemon (cleans up socket/markers)
 ```
+
+## dais-top
+
+```sh
+tools/dais-top
+```
+
+Full-screen status cockpit: mode badge (pulsing while recording), htop-style
+mic level bar + sparkline with the Silero speech probability (VAD mode only —
+the latch records to a file, so it shows a pulse animation instead), target
+slots with the active one highlighted, the last utterances with their outcome
+(`→ Enter`, `→ typed`, `✗ dropped: …`), and today's counters (listened time,
+utterances, words, drops, mean ASR latency) seeded from the event log.
+
+Control keys: `v` VAD toggle · `r` record latch · `Esc` send Escape ·
+`1`–`5` switch target · `a` arm · `q` quit.
+
+Entirely optional: when no dais-top is connected the daemon broadcasts
+nothing and the ear skips level computation entirely (the daemon toggles the
+meter via `set_levels` on subscriber transitions) — zero overhead.
 
 ## Voice commands
 

@@ -97,6 +97,39 @@
     (is (every? #(= trace (get % "trace_id")) (get replayed "events"))))
   (is (pos? (count (get (req {"op" "events" "last" 10}) "events")))))
 
+(deftest broadcast-pushes-and-drops-dead-subscribers
+  (let [good (java.io.StringWriter.)
+        dead (proxy [java.io.Writer] []
+               (write [_] (throw (java.io.IOException. "gone")))
+               (flush [] (throw (java.io.IOException. "gone")))
+               (close []))]
+    (daemon/subscribe! *ctx* good)
+    (daemon/subscribe! *ctx* dead)
+    (daemon/broadcast! *ctx* {"type" "asr.level" "payload" {"rms" 0.1}})
+    (is (re-find #"asr\.level" (str good)))
+    (is (= #{good} @(:subscribers *ctx*))
+        "throwing writer was dropped from the registry")
+    (daemon/unsubscribe! *ctx* good)))
+
+(deftest level-events-broadcast-but-never-logged
+  (let [sub (java.io.StringWriter.)]
+    (daemon/subscribe! *ctx* sub)
+    (#'daemon/on-ear-event *ctx* {"type" "asr.level"
+                                  "payload" {"rms" 0.2 "prob" 0.9 "speech" true}})
+    (is (re-find #"asr\.level" (str sub)) "subscriber received the level event")
+    (is (empty? (filter #(= "asr.level" (get % "type"))
+                        (get (req {"op" "events" "last" 100}) "events")))
+        "level events never reach the audit log")
+    (daemon/unsubscribe! *ctx* sub)))
+
+(deftest subscriber-receives-recorded-events
+  (let [sub (java.io.StringWriter.)]
+    (daemon/subscribe! *ctx* sub)
+    (inject "press enter")
+    (is (re-find #"voice\.transcript" (str sub)))
+    (is (re-find #"action\.executed" (str sub)))
+    (daemon/unsubscribe! *ctx* sub)))
+
 (deftest invalid-and-unknown
   (is (false? (get (req {"op" "publish" "event" {"type" "voice.transcript"}}) "ok")))
   (is (false? (get (req {"op" "nope"}) "ok")))

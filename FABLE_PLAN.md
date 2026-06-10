@@ -69,9 +69,15 @@ line, errors as `{"ok":false,"error":"..."}`:
 ```
 
 Ear-worker event types: `asr.ready`, `asr.listening`, `asr.speech_start`,
-`asr.speech_end`, `voice.transcript`, `asr.error`. Daemon-logged types:
+`asr.speech_end`, `voice.transcript`, `asr.dropped`, `asr.error`. Daemon-logged types:
 `control.state_changed`, `action.executed`, `action.error`. Each utterance keeps its
 WAV on disk and the transcript event references it, so misses are replayable.
+
+`{"op":"subscribe"}` turns a connection into a push stream of all recorded events
+(used by `tools/dais-top`). `asr.level` meter events (~8 Hz: rms, Silero prob) are
+**ephemeral by design**: broadcast to subscribers only, never logged, and the ear
+only computes them while at least one subscriber exists (daemon sends `set_levels`
+on 0↔n transitions) — the system carries zero overhead when no UI is watching.
 
 ### State machine (daemon-owned; ear is mode-dumb)
 

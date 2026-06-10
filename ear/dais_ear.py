@@ -9,6 +9,9 @@ stdin (one JSON object per line):
   {"type":"latch_stop"}               stop recording, transcribe, emit transcript
   {"type":"set_mode","mode":"vad"}    open the mic, Silero-endpoint utterances
   {"type":"set_mode","mode":"off"}    stop VAD / discard any recording, go idle
+  {"type":"set_levels","on":true}     emit asr.level meter events (~8 Hz) while
+                                      in VAD mode; off by default so the system
+                                      carries zero overhead when no UI watches
 
 stdout (one dais.event.v1 envelope per line):
   asr.ready | asr.listening | asr.speech_start | asr.speech_end
@@ -136,14 +139,25 @@ class StreamingVad:
         self._c = np.zeros((1, 1, 128), dtype="float32")
         self._context = np.zeros((1, self.CONTEXT), dtype="float32")
 
-    def prob(self, chunk_bytes: bytes) -> float:
+    def to_float(self, chunk_bytes: bytes):
         np = self._np
-        chunk = np.frombuffer(chunk_bytes, dtype="<i2").astype("float32") / 32768.0
+        return np.frombuffer(chunk_bytes, dtype="<i2").astype("float32") / 32768.0
+
+    def prob_array(self, chunk) -> float:
+        np = self._np
         x = np.concatenate([self._context, chunk.reshape(1, -1)], axis=1)
         out, self._h, self._c = self._session.run(
             None, {"input": x, "h": self._h, "c": self._c})
         self._context = chunk[-self.CONTEXT:].reshape(1, -1)
-        return float(self._np.asarray(out).reshape(-1)[0])
+        return float(np.asarray(out).reshape(-1)[0])
+
+    def prob(self, chunk_bytes: bytes) -> float:
+        return self.prob_array(self.to_float(chunk_bytes))
+
+    @staticmethod
+    def rms(chunk) -> float:
+        import numpy as np
+        return float(np.sqrt(np.mean(chunk * chunk)))
 
 
 class VadStream(threading.Thread):
@@ -209,11 +223,21 @@ class VadStream(threading.Thread):
                      self.ear.args.model)
             utterance, in_speech, voiced, silent_tail = [], False, 0, 0
 
+        chunk_idx = 0
         while not self.stopping:
             data = self.proc.stdout.read(CHUNK_BYTES)
             if not data or len(data) < CHUNK_BYTES:
                 break
-            p = vad.prob(data)
+            chunk = vad.to_float(data)
+            p = vad.prob_array(chunk)
+            chunk_idx += 1
+            # Meter events only when a UI subscribed (daemon toggles the flag);
+            # otherwise this path costs nothing beyond the VAD it always does.
+            if self.ear.levels_on and chunk_idx % 4 == 0:
+                emit("asr.level",
+                     {"rms": round(vad.rms(chunk), 4), "prob": round(p, 3),
+                      "speech": in_speech},
+                     self.ear.args.model)
             if mute_chunks > 0:
                 mute_chunks -= 1
                 continue
@@ -256,6 +280,7 @@ class Ear:
         self.rec_path: Path | None = None
         self.rec_started: float = 0.0
         self.vad_stream: VadStream | None = None
+        self.levels_on = False
         self.asr_q: queue.Queue = queue.Queue()
 
     def load_models(self) -> None:
@@ -410,6 +435,8 @@ class Ear:
                 self.vad_start()
             else:
                 emit("asr.error", {"error": f"unknown mode: {mode!r}"}, self.args.model)
+        elif kind == "set_levels":
+            self.levels_on = bool(msg.get("on"))
         else:
             emit("asr.error", {"error": f"unknown message type: {kind!r}"}, self.args.model)
 

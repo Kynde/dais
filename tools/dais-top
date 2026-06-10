@@ -1,0 +1,394 @@
+#!/usr/bin/env node
+// dais-top — live TUI cockpit for the dais daemon. Dependency-free ANSI.
+//
+//   DAIS_SOCKET=...  socket override (default $XDG_RUNTIME_DIR/dais/control.sock)
+//
+// Keys: v VAD toggle · r record latch · Esc send Escape · 1-5 switch target
+//       a arm · q quit
+//
+// Entirely optional: the daemon runs identically without it. Subscribing
+// turns on the ear's ~8 Hz level meter events; they stop when we disconnect.
+
+"use strict";
+const net = require("node:net");
+
+const SOCKET =
+  process.env.DAIS_SOCKET ??
+  `${process.env.XDG_RUNTIME_DIR ?? "/tmp"}/dais/control.sock`;
+
+// ---------- terminal ----------
+const ESC = "\x1b[";
+const out = process.stdout;
+const C = {
+  reset: `${ESC}0m`, bold: `${ESC}1m`, dim: `${ESC}2m`,
+  green: `${ESC}32m`, red: `${ESC}31m`, yellow: `${ESC}33m`,
+  cyan: `${ESC}36m`, gray: `${ESC}90m`, magenta: `${ESC}35m`,
+  bgGreen: `${ESC}42;30m`, bgRed: `${ESC}41;37m`, bgGray: `${ESC}100;37m`,
+};
+const SPARK = "▁▂▃▄▅▆▇█";
+const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+function enterScreen() { out.write(`${ESC}?1049h${ESC}?25l`); }
+function leaveScreen() { out.write(`${ESC}?1049l${ESC}?25h${C.reset}`); }
+
+// ---------- state ----------
+const S = {
+  connected: false,
+  mode: "off",            // off | vad-listening | manual-recording
+  modeSince: Date.now(),
+  armed: false,
+  execution: "?",
+  earAlive: false,
+  strategy: "?",
+  enterMode: "?",
+  activeSlot: null,
+  targets: {},            // slot -> {type, pane}
+  levels: [],             // recent rms values (ring)
+  prob: 0,
+  speech: false,
+  peak: 0,
+  peakAt: 0,
+  transcribing: false,
+  heard: [],              // {time, text, outcome, drop, trace}
+  flashUntil: 0,
+  counters: { listenMs: 0, utterances: 0, words: 0, drops: 0, asrMsSum: 0, asrN: 0 },
+  note: "",               // transient footer note
+  noteUntil: 0,
+};
+
+function today() { return new Date().toISOString().slice(0, 10); }
+function clockOf(iso) { return iso ? iso.slice(11, 19) : "--:--:--"; }
+
+// ---------- event ingestion (shared by replay + live) ----------
+function ingest(ev, live) {
+  const t = ev.type;
+  const p = ev.payload ?? {};
+  if (t === "asr.level") {
+    S.levels.push(p.rms ?? 0);
+    if (S.levels.length > 48) S.levels.shift();
+    S.prob = p.prob ?? 0;
+    S.speech = !!p.speech;
+    if ((p.rms ?? 0) >= S.peak) { S.peak = p.rms; S.peakAt = Date.now(); }
+    return;
+  }
+  const isToday = (ev.time ?? "").startsWith(today());
+  if (t === "voice.transcript") {
+    if (live) S.transcribing = false;
+    if (!isToday) return;
+    S.counters.utterances += 1;
+    S.counters.words += (p.text ?? "").split(/\s+/).filter(Boolean).length;
+    if (p.asr_ms) { S.counters.asrMsSum += p.asr_ms; S.counters.asrN += 1; }
+    S.heard.unshift({ time: clockOf(ev.time), text: p.text ?? "", trace: ev.trace_id });
+    S.heard.length = Math.min(S.heard.length, 20);
+  } else if (t === "asr.dropped") {
+    if (live) S.transcribing = false;
+    if (!isToday) return;
+    S.counters.drops += 1;
+    S.heard.unshift({ time: clockOf(ev.time), drop: p.reason ?? "?", text: p.text ?? "" });
+    S.heard.length = Math.min(S.heard.length, 20);
+  } else if (t === "action.executed" || t === "action.error") {
+    const entry = S.heard.find((h) => h.trace && h.trace === ev.trace_id);
+    if (entry) {
+      entry.outcome = describeAction(t, p);
+      if (live) S.flashUntil = Date.now() + 600;
+    }
+  } else if (t === "control.state_changed") {
+    trackListenTime(p.mode, ev.time, live);
+    if (live) {
+      S.mode = p.mode ?? S.mode;
+      if (p.active_slot != null) S.activeSlot = p.active_slot;
+    }
+  } else if (live && t === "asr.speech_start") {
+    S.speech = true;
+  } else if (live && t === "asr.speech_end") {
+    S.speech = false;
+    S.transcribing = true;
+  } else if (live && t === "asr.ready") {
+    S.earAlive = true;
+  } else if (live && t === "asr.error") {
+    note(`ear error: ${p.error ?? "?"}`);
+  }
+}
+
+function describeAction(t, p) {
+  if (t === "action.error") return `${C.red}✗ ${p.error ?? "error"}${C.reset}`;
+  const plan = p.plan ?? {};
+  if (plan.action === "press-keys") return `→ ${(plan.keys ?? []).join(" ")}`;
+  if (plan.action === "type-text") return plan.submit ? "→ typed ⏎" : "→ typed";
+  if (plan.action === "control") return `→ ${plan.control}`;
+  return "→ done";
+}
+
+// listen-time bookkeeping from control.state_changed stream (replay + live)
+let openSince = null; // epoch ms while mode != off
+function trackListenTime(mode, isoTime, live) {
+  const at = live ? Date.now() : Date.parse(isoTime ?? "");
+  if (!Number.isFinite(at)) return;
+  const open = mode && mode !== "off";
+  if (open && openSince == null) openSince = at;
+  if (!open && openSince != null) {
+    if ((isoTime ?? "").startsWith(today()) || live) S.counters.listenMs += at - openSince;
+    openSince = null;
+  }
+}
+function liveListenMs() {
+  return S.counters.listenMs + (openSince != null ? Date.now() - openSince : 0);
+}
+
+function note(msg) { S.note = msg; S.noteUntil = Date.now() + 3000; }
+
+// ---------- daemon connections ----------
+let ctl = null;          // request/response connection
+const pending = [];      // FIFO of response callbacks
+
+function request(req, cb) {
+  if (!ctl || ctl.destroyed) { if (cb) cb(null); return; }
+  pending.push(cb ?? (() => {}));
+  ctl.write(JSON.stringify(req) + "\n");
+}
+
+function lineSplitter(onLine) {
+  let buf = "";
+  return (chunk) => {
+    buf += chunk;
+    let nl;
+    while ((nl = buf.indexOf("\n")) >= 0) {
+      const line = buf.slice(0, nl);
+      buf = buf.slice(nl + 1);
+      if (line.trim()) onLine(line);
+    }
+  };
+}
+
+function connect() {
+  // control connection: seed queries + key commands
+  ctl = net.createConnection({ path: SOCKET });
+  ctl.setEncoding("utf8");
+  ctl.on("data", lineSplitter((line) => {
+    const cb = pending.shift();
+    try { if (cb) cb(JSON.parse(line)); } catch { /* ignore */ }
+  }));
+  ctl.on("connect", () => { S.connected = true; seed(); });
+  ctl.on("error", () => {});
+  ctl.on("close", () => { S.connected = false; retry(); });
+
+  // subscription connection: the live feed
+  const sub = net.createConnection({ path: SOCKET });
+  sub.setEncoding("utf8");
+  let acked = false;
+  sub.on("connect", () => sub.write('{"op":"subscribe"}\n'));
+  sub.on("data", lineSplitter((line) => {
+    if (!acked) { acked = true; return; } // the {"ok":true,"subscribed":true} ack
+    try { ingest(JSON.parse(line), true); } catch { /* ignore */ }
+  }));
+  sub.on("error", () => {});
+  sub.on("close", () => { if (ctl && !ctl.destroyed) ctl.destroy(); });
+}
+
+let retryTimer = null;
+function retry() {
+  if (retryTimer) return;
+  retryTimer = setTimeout(() => { retryTimer = null; connect(); }, 1500);
+}
+
+function seed() {
+  // reset day counters, replay today's log, then status + targets
+  S.counters = { listenMs: 0, utterances: 0, words: 0, drops: 0, asrMsSum: 0, asrN: 0 };
+  S.heard = [];
+  openSince = null;
+  request({ op: "events", last: 1000 }, (resp) => {
+    for (const ev of resp?.events ?? []) ingest(ev, false);
+    request({ op: "query", query: "status" }, (st) => {
+      if (!st?.ok) return;
+      S.mode = st.mode; S.armed = st.armed; S.execution = st.execution;
+      S.earAlive = st.ear_alive; S.strategy = st.strategy;
+      S.enterMode = st.enter_mode; S.activeSlot = st.active_slot;
+      // status says we're currently open -> start the live clock now
+      if (st.mode !== "off" && openSince == null) openSince = Date.now();
+      if (st.mode === "off" && openSince != null) openSince = null;
+    });
+    request({ op: "target", action: "list" }, (tg) => {
+      if (tg?.ok) { S.targets = tg.targets ?? {}; S.activeSlot = tg.active_slot; }
+    });
+  });
+}
+
+// ---------- rendering ----------
+let frame = 0;
+function fmtDuration(ms) {
+  const s = Math.floor(ms / 1000);
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), r = s % 60;
+  return h ? `${h}h${String(m).padStart(2, "0")}m` : m ? `${m}m${String(r).padStart(2, "0")}s` : `${r}s`;
+}
+
+function sparkline(width) {
+  const lvls = S.levels.slice(-width);
+  const scale = Math.max(S.peak, 0.08);
+  let s = "";
+  for (const v of lvls) {
+    const i = Math.min(SPARK.length - 1, Math.floor((v / scale) * SPARK.length));
+    s += SPARK[i];
+  }
+  return s.padStart(width, " ");
+}
+
+function bar(value, max, width) {
+  const filled = Math.min(width, Math.round((value / max) * width));
+  const peakPos = Math.min(width - 1, Math.round((S.peak / max) * width));
+  let s = "";
+  for (let i = 0; i < width; i++) {
+    if (i < filled) s += S.speech ? `${C.green}█` : `${C.cyan}█`;
+    else if (i === peakPos && Date.now() - S.peakAt < 2000) s += `${C.yellow}┃`;
+    else s += `${C.gray}░`;
+  }
+  return s + C.reset;
+}
+
+function modeBadge() {
+  if (!S.connected) return `${C.bgGray} DISCONNECTED ${C.reset}`;
+  if (S.mode === "vad-listening") {
+    const dot = frame % 10 < 5 ? "●" : "◉";
+    return `${C.bgGreen} ${dot} LISTENING ${C.reset}`;
+  }
+  if (S.mode === "manual-recording") {
+    const dot = frame % 6 < 3 ? "⏺" : " ";
+    return `${C.bgRed} ${dot} RECORDING ${C.reset}`;
+  }
+  return `${C.bgGray} ○ OFF ${C.reset}`;
+}
+
+function truncate(s, n) {
+  return s.length > n ? s.slice(0, n - 1) + "…" : s;
+}
+
+function render() {
+  frame++;
+  const w = Math.max(60, out.columns ?? 80);
+  const h = out.rows ?? 24;
+  const sep = C.gray + "─".repeat(w) + C.reset;
+  const lines = [];
+
+  // header
+  const targetStr = S.activeSlot != null
+    ? `target ${C.bold}[${S.activeSlot}]${C.reset} ${describeTarget(S.targets[S.activeSlot])}`
+    : "no target";
+  const right = `${S.earAlive ? C.green + "ear ✓" : C.red + "ear ✗"}${C.reset}  ` +
+    `${S.armed ? C.yellow + "ARMED" : C.dim + "armed –"}${C.reset}  ` +
+    `${C.dim}${S.execution}${C.reset}`;
+  lines.push(` ${C.bold}dais${C.reset} ${modeBadge()}  ${targetStr}   ${right}`);
+  lines.push(sep);
+
+  // mic meter
+  const cur = S.levels.length ? S.levels[S.levels.length - 1] : 0;
+  if (S.mode === "vad-listening") {
+    const spin = S.transcribing ? `${C.magenta}${SPINNER[frame % SPINNER.length]} transcribing…${C.reset}` :
+      S.speech ? `${C.green}🗣 speech${C.reset}` : `${C.dim}listening${C.reset}`;
+    lines.push(` mic ${C.cyan}${sparkline(24)}${C.reset}  ${bar(cur, Math.max(S.peak, 0.08), 16)}` +
+      `  ${C.dim}prob${C.reset} ${S.prob >= 0.5 ? C.green : C.gray}${S.prob.toFixed(2)}${C.reset}  ${spin}`);
+  } else if (S.mode === "manual-recording") {
+    const pulse = "▰".repeat(1 + (frame % 8)) + "▱".repeat(8 - (frame % 8));
+    const spin = S.transcribing ? ` ${C.magenta}${SPINNER[frame % SPINNER.length]} transcribing…${C.reset}` : "";
+    lines.push(` mic ${C.red}${pulse}${C.reset} ${C.dim}recording (no meter in latch mode)${C.reset}${spin}`);
+  } else {
+    const spin = S.transcribing ? ` ${C.magenta}${SPINNER[frame % SPINNER.length]} transcribing…${C.reset}` : "";
+    lines.push(` mic ${C.dim}closed${C.reset}${spin}`);
+  }
+  lines.push(sep);
+
+  // targets
+  const slots = Object.keys(S.targets).sort();
+  const tgts = slots.map((k) => {
+    const active = String(S.activeSlot) === k;
+    const label = `${k} ${describeTarget(S.targets[k])}`;
+    return active ? `${C.bold}${C.cyan}[${label}]${C.reset}` : `${C.dim} ${label} ${C.reset}`;
+  });
+  lines.push(` targets  ${tgts.join("  ") || C.dim + "none configured" + C.reset}`);
+  lines.push(sep);
+
+  // heard list
+  lines.push(` ${C.bold}heard${C.reset}`);
+  const heardRows = Math.max(3, h - lines.length - 4);
+  const flash = Date.now() < S.flashUntil;
+  S.heard.slice(0, heardRows).forEach((e, i) => {
+    if (e.drop) {
+      lines.push(`  ${C.dim}${e.time}${C.reset}  ${C.red}✗${C.reset} ${C.dim}dropped: ${e.drop}` +
+        (e.text ? ` (“${truncate(e.text, 24)}”)` : "") + C.reset);
+    } else {
+      const hl = i === 0 && flash ? C.green : "";
+      lines.push(`  ${C.dim}${e.time}${C.reset}  ${hl}${truncate(e.text, w - 30)}${C.reset} ` +
+        `${C.cyan}${e.outcome ?? ""}${C.reset}`);
+    }
+  });
+  while (lines.length < h - 3) lines.push("");
+
+  // counters + footer
+  const c = S.counters;
+  const asr = c.asrN ? `asr ø${(c.asrMsSum / c.asrN / 1000).toFixed(1)}s` : "asr –";
+  lines.push(sep);
+  lines.push(` ${C.dim}today${C.reset}  listened ${C.bold}${fmtDuration(liveListenMs())}${C.reset}` +
+    ` · ${C.bold}${c.utterances}${C.reset} utterances · ${C.bold}${c.words}${C.reset} words` +
+    ` · ${C.bold}${c.drops}${C.reset} drops · ${asr}` +
+    `   ${C.dim}${S.strategy}/${S.enterMode}${C.reset}`);
+  const noteStr = Date.now() < S.noteUntil ? `  ${C.yellow}${S.note}${C.reset}` : "";
+  lines.push(` ${C.dim}[v]ad  [r]ec  [Esc] esc  [1-5] target  [a]rm  [q]uit${C.reset}${noteStr}`);
+
+  out.write(`${ESC}H${ESC}2J` + lines.slice(0, h).join("\n"));
+}
+
+function describeTarget(t) {
+  if (!t) return "?";
+  return t.type === "focus" ? "focus" : t.pane ?? "?";
+}
+
+// ---------- input ----------
+function onKey(key) {
+  if (key === "q" || key === "\x03") return shutdown();
+  if (key === "v") request({ op: "control", action: "toggle-vad" }, ack("vad"));
+  else if (key === "r") request({ op: "control", action: "toggle-record" }, ack("rec"));
+  else if (key === "a") request({ op: "control", action: "arm" }, ack("armed"));
+  else if (key === "\x1b") request({ op: "control", action: "esc" }, ack("escape sent"));
+  else if (/^[1-5]$/.test(key)) {
+    request({ op: "target", action: "use", slot: Number(key) }, ack(`target ${key}`));
+  }
+}
+function ack(what) {
+  return (resp) => {
+    if (resp?.ok) note(what);
+    else note(`✗ ${resp?.error ?? "failed"}`);
+    // refresh armed/slot quickly after a control
+    request({ op: "query", query: "status" }, (st) => {
+      if (st?.ok) { S.armed = st.armed; S.activeSlot = st.active_slot; S.mode = st.mode; }
+    });
+  };
+}
+
+function shutdown() {
+  leaveScreen();
+  process.exit(0);
+}
+
+// ---------- main ----------
+function main() {
+  enterScreen();
+  process.stdin.setRawMode?.(true);
+  process.stdin.resume();
+  process.stdin.setEncoding("utf8");
+  let escTimer = null;
+  process.stdin.on("data", (k) => {
+    // lone Esc vs escape sequences (arrows etc.): wait briefly for a follow-up
+    if (k === "\x1b") {
+      escTimer = setTimeout(() => onKey("\x1b"), 120);
+      return;
+    }
+    if (escTimer && k.startsWith("[")) { clearTimeout(escTimer); escTimer = null; return; }
+    if (escTimer) { clearTimeout(escTimer); escTimer = null; }
+    onKey(k);
+  });
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
+  out.on("resize", render);
+  connect();
+  setInterval(render, 100);
+}
+
+main();

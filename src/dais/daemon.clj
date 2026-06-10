@@ -71,6 +71,50 @@
 (defn- write-state! [{:keys [runtime-dir state]}]
   (state/write-files! runtime-dir @state))
 
+;; --- subscribers (dais-top etc.) ---
+;; Entirely optional: with no subscribers, broadcast! is a no-op and the ear
+;; never emits level events (set_levels toggles on 0 <-> n transitions), so
+;; the system carries no overhead when no UI is watching.
+
+(defn- sync-levels!
+  "Tell the ear whether anyone is watching the meter."
+  [ctx on?]
+  (when-let [e (some-> (:ear ctx) deref)]
+    (ear/send! e {"type" "set_levels" "on" (boolean on?)})))
+
+(defn subscribe!
+  [ctx ^java.io.Writer w]
+  (let [subs (swap! (:subscribers ctx) conj w)]
+    (when (= 1 (count subs)) (sync-levels! ctx true))))
+
+(defn unsubscribe!
+  [ctx ^java.io.Writer w]
+  (let [subs (swap! (:subscribers ctx) disj w)]
+    (when (zero? (count subs)) (sync-levels! ctx false))))
+
+(defn broadcast!
+  "Push one event line to every subscriber; a failing writer is dropped."
+  [ctx event]
+  (let [subs @(:subscribers ctx)]
+    (when (seq subs)
+      (let [line (str (json/write-str event) "\n")]
+        (doseq [^java.io.Writer w subs]
+          (try
+            (locking w (.write w line) (.flush w))
+            (catch Exception _ (unsubscribe! ctx w))))))))
+
+(defn- record!
+  "Append to the audit log and push to subscribers."
+  [ctx event]
+  (log/append! (:events-dir ctx) event)
+  (broadcast! ctx event)
+  event)
+
+(defn- record-all! [ctx events]
+  (log/append-all! (:events-dir ctx) events)
+  (run! #(broadcast! ctx %) events)
+  events)
+
 (defn- transition!
   "Apply a pure transition fn to the state atom. On success: persist state
   files, sync the ear worker (latch/mode control messages), notify, and
@@ -158,7 +202,7 @@
    :armed (:armed @state)})
 
 (defn- handle-publish
-  [{:keys [state events-dir] :as ctx} {:strs [event]}]
+  [{:keys [state] :as ctx} {:strs [event]}]
   (cond
     (not (event/valid-envelope? event))
     {"ok" false "error" "Invalid event envelope (missing/invalid required fields)."}
@@ -174,17 +218,17 @@
       (let [effects (dispatch-plan! ctx plan ids)
             all (into [transcript] effects)]
         (write-state! ctx)
-        (log/append-all! events-dir all)
+        (record-all! ctx all)
         {"ok" true "trace_id" trace-id "plan" (plan->json plan) "events" all}))
 
     :else
     ;; Non-transcript events (ear lifecycle etc.) are logged as-is.
     (let [stamped (with-sequence event)]
-      (log/append! events-dir stamped)
+      (record! ctx stamped)
       {"ok" true "events" [stamped]})))
 
 (defn- handle-control
-  [{:keys [events-dir] :as ctx} {:strs [action]}]
+  [ctx {:strs [action]}]
   (case action
     ("toggle-vad" "toggle-record" "voice-off" "arm")
     (let [f (case action
@@ -194,13 +238,13 @@
               "arm" state/arm)
           res (transition! ctx f action nil)]
       (when-let [ev (get res "event")]
-        (log/append! events-dir ev))
+        (record! ctx ev))
       (dissoc res "event"))
 
     "esc"
     (let [plan {:action :press-keys :keys ["Escape"]}
           ev (execute-plan! ctx plan nil)]
-      (log/append! events-dir ev)
+      (record! ctx ev)
       {"ok" (= "action.executed" (get ev "type")) "events" [ev]})
 
     "shutdown"
@@ -224,7 +268,7 @@
                        " (expected session:window.pane, focus, or current)")}))
 
 (defn- handle-target
-  [{:keys [state events-dir config] :as ctx} {:strs [action slot pane]}]
+  [{:keys [state config] :as ctx} {:strs [action slot pane]}]
   (case action
     "set"
     (if-not (integer? slot)
@@ -235,7 +279,7 @@
           (let [res (transition! ctx #(state/set-target % slot target)
                                  (str "target-set:" slot) nil)]
             (when-let [ev (get res "event")]
-              (log/append! events-dir ev))
+              (record! ctx ev))
             (-> res (dissoc "event") (assoc "slot" slot "target" (target->json target)))))))
 
     "use"
@@ -243,7 +287,7 @@
       {"ok" false "error" "target use needs an integer slot"}
       (let [res (transition! ctx #(state/set-slot % slot) (str "target-use:" slot) nil)]
         (when-let [ev (get res "event")]
-          (log/append! events-dir ev))
+          (record! ctx ev))
         (dissoc res "event")))
 
     "list"
@@ -265,13 +309,17 @@
       "control" (handle-control ctx req)
       "target" (handle-target ctx req)
       "query" (case (get req "query")
-                "status" (let [st @state]
+                "status" (let [st @state
+                               config (:config ctx)]
                            {"ok" true "status" "running"
                             "execution" (if dry-run "dry-run" "live")
                             "mode" (name (:mode st))
                             "armed" (boolean (:armed st))
                             "active_slot" (:active-slot st)
                             "target" (target-label st)
+                            "ear_alive" (boolean (some-> (:ear ctx) deref ear/alive?))
+                            "strategy" (name (get-in config [:router :strategy] :whole-match))
+                            "enter_mode" (name (:enter-mode config :no-enter))
                             "sequence" (.get sequence-counter)
                             "events_dir" events-dir})
                 {"ok" false "error" (str "Unknown query: " (pr-str (get req "query")))})
@@ -286,6 +334,7 @@
    :commands (router/merged-commands (get-in config [:router :commands]))
    :state (atom (state/initial-state config))
    :ear (atom nil)
+   :subscribers (atom #{})
    :events-dir events-dir
    :runtime-dir runtime-dir
    :dry-run (boolean dry-run)})
@@ -294,28 +343,35 @@
   "Handle one event from the ear worker's stdout. Transcripts run the full
   publish path (route -> execute -> log); lifecycle events update state and
   are logged."
-  [{:keys [events-dir config state] :as ctx} ev]
+  [{:keys [config state] :as ctx} ev]
   (let [t (get ev "type")]
     (case t
+      ;; Meter events: ephemeral by design — broadcast to subscribers only,
+      ;; never logged, no sequence (would flood the audit log at ~8 Hz).
+      "asr.level" (broadcast! ctx ev)
       "voice.transcript" (handle-request ctx {"op" "publish" "event" ev})
       ("asr.speech_start" "asr.speech_end")
       (locking handler-lock
         (swap! state assoc :speech (= t "asr.speech_start"))
         (write-state! ctx)
-        (log/append! events-dir (with-sequence ev)))
+        (record! ctx (with-sequence ev)))
       ("asr.ready" "asr.listening" "asr.error")
       (locking handler-lock
-        (log/append! events-dir (with-sequence ev))
+        (record! ctx (with-sequence ev))
         (case t
-          "asr.ready" (notify/notify! config "Dais ready" "Speech model loaded"
-                                      {:icon "audio-input-microphone" :urgency "low"})
+          ;; A freshly (re)started ear defaults to levels-off; if a UI is
+          ;; already subscribed, switch the meter back on.
+          "asr.ready" (do (when (seq @(:subscribers ctx))
+                            (sync-levels! ctx true))
+                          (notify/notify! config "Dais ready" "Speech model loaded"
+                                          {:icon "audio-input-microphone" :urgency "low"}))
           "asr.error" (notify/notify! config "Dais error" (get-in ev ["payload" "error"])
                                       {:icon "dialog-error"})
           nil))
       ;; Unknown types are logged if they carry a valid envelope, else dropped.
       (when (event/valid-envelope? ev)
         (locking handler-lock
-          (log/append! events-dir (with-sequence ev)))))))
+          (record! ctx (with-sequence ev)))))))
 
 (defn start-ear!
   "Spawn the ear worker per config (:ear {:enabled? :cmd :dir}) and wire its
@@ -339,22 +395,35 @@
       worker)))
 
 (defn- serve-connection
+  "One client connection. A {\"op\":\"subscribe\"} request turns it into a push
+  stream: the writer joins the subscriber registry (acked once) and every
+  recorded event — plus ephemeral asr.level events — is pushed as ndjson until
+  the client disconnects. Response writes lock the writer because broadcasts
+  may interleave from other threads."
   [ctx ^SocketChannel ch]
-  (with-open [ch ch
-              in (BufferedReader. (InputStreamReader.
-                                   (Channels/newInputStream ch) StandardCharsets/UTF_8))
-              out (OutputStreamWriter. (Channels/newOutputStream ch) StandardCharsets/UTF_8)]
-    (loop []
-      (when-let [line (.readLine in)]
-        (when-not (str/blank? line)
-          (let [resp (try
-                       (handle-request ctx (json/read-str line))
-                       (catch Exception e
-                         {"ok" false "error" (str "Request failed: " (.getMessage e))}))]
-            (.write out (json/write-str resp))
-            (.write out "\n")
-            (.flush out)))
-        (recur)))))
+  (let [out (OutputStreamWriter. (Channels/newOutputStream ch) StandardCharsets/UTF_8)]
+    (try
+      (with-open [ch ch
+                  in (BufferedReader. (InputStreamReader.
+                                       (Channels/newInputStream ch) StandardCharsets/UTF_8))]
+        (loop []
+          (when-let [line (.readLine in)]
+            (when-not (str/blank? line)
+              (let [resp (try
+                           (let [req (json/read-str line)]
+                             (if (= "subscribe" (get req "op"))
+                               (do (subscribe! ctx out)
+                                   {"ok" true "subscribed" true})
+                               (handle-request ctx req)))
+                           (catch Exception e
+                             {"ok" false "error" (str "Request failed: " (.getMessage e))}))]
+                (locking out
+                  (.write out (json/write-str resp))
+                  (.write out "\n")
+                  (.flush out))))
+            (recur))))
+      (finally
+        (unsubscribe! ctx out)))))
 
 (defn- delete-if-exists [^String path]
   (Files/deleteIfExists (Path/of path (make-array String 0))))

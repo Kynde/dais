@@ -13,3 +13,4 @@ notification look :: src/dais/daemon.clj mode-notification + src/dais/notify.clj
 debug a misheard utterance :: tools/dais-ctl events / replay <trace_id> # WAV path in the transcript event payload
 hotkey scripts / KDE binding :: tools/dais-{vad,rec,esc} + tools/kde/*.desktop # sh+socat on purpose, see gotchas
 daemon service :: tools/dais.service # symlinked into ~/.config/systemd/user/; journalctl --user -u dais
+live event stream / TUI :: tools/dais-top + subscribe op in src/dais/daemon.clj serve-connection # asr.level meter events are broadcast-only, never logged; ear emits them only while someone is subscribed (set_levels)
