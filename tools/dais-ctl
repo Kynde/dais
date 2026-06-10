@@ -1,0 +1,111 @@
+#!/usr/bin/env node
+// dais-ctl — thin client for the dais daemon socket. Dependency-free.
+//
+// Usage:
+//   dais-ctl status
+//   dais-ctl inject <text...>      feed a fake transcript into the router
+//   dais-ctl vad                   toggle the VAD session       (F9)
+//   dais-ctl rec                   toggle the manual latch      (F10)
+//   dais-ctl esc                   send Escape to the target    (F11)
+//   dais-ctl off                   force voice off
+//   dais-ctl arm                   next utterance must be a command
+//   dais-ctl target set <slot> <session:window.pane|focus|current>
+//   dais-ctl target use <slot>
+//   dais-ctl target list
+//   dais-ctl events [n]
+//   dais-ctl replay <trace_id>
+//   dais-ctl shutdown
+//
+// Socket: $DAIS_SOCKET, else $XDG_RUNTIME_DIR/dais/control.sock
+
+const net = require("node:net");
+const { randomUUID } = require("node:crypto");
+
+const SOCKET =
+  process.env.DAIS_SOCKET ??
+  `${process.env.XDG_RUNTIME_DIR ?? "/tmp"}/dais/control.sock`;
+
+function usage(code = 1) {
+  const lines = require("node:fs")
+    .readFileSync(__filename, "utf8")
+    .split("\n")
+    .filter((l) => l.startsWith("// "))
+    .map((l) => l.slice(3));
+  console.error(lines.join("\n"));
+  process.exit(code);
+}
+
+function buildRequest(argv) {
+  const [cmd, ...rest] = argv;
+  switch (cmd) {
+    case "status":
+      return { op: "query", query: "status" };
+    case "inject": {
+      if (rest.length === 0) usage();
+      return {
+        op: "publish",
+        event: {
+          schema: "dais.event.v1",
+          id: randomUUID(),
+          time: new Date().toISOString(),
+          type: "voice.transcript",
+          source: { module: "dais-ctl", provider: "inject" },
+          payload: { text: rest.join(" ") },
+        },
+      };
+    }
+    case "vad":
+      return { op: "control", action: "toggle-vad" };
+    case "rec":
+      return { op: "control", action: "toggle-record" };
+    case "esc":
+      return { op: "control", action: "esc" };
+    case "off":
+      return { op: "control", action: "voice-off" };
+    case "arm":
+      return { op: "control", action: "arm" };
+    case "shutdown":
+      return { op: "control", action: "shutdown" };
+    case "target": {
+      const [action, slot, value] = rest;
+      if (action === "set" && slot && value)
+        return { op: "target", action: "set", slot: Number(slot), pane: value };
+      if (action === "use" && slot)
+        return { op: "target", action: "use", slot: Number(slot) };
+      if (action === "list") return { op: "target", action: "list" };
+      usage();
+      break;
+    }
+    case "events":
+      return { op: "events", last: rest[0] ? Number(rest[0]) : 20 };
+    case "replay":
+      if (!rest[0]) usage();
+      return { op: "replay", trace_id: rest[0] };
+    default:
+      usage(cmd === "--help" || cmd === "-h" ? 0 : 1);
+  }
+}
+
+function main() {
+  const req = buildRequest(process.argv.slice(2));
+  const sock = net.createConnection({ path: SOCKET });
+  let buf = "";
+  sock.setEncoding("utf8");
+  sock.on("connect", () => sock.write(JSON.stringify(req) + "\n"));
+  sock.on("data", (chunk) => {
+    buf += chunk;
+    const nl = buf.indexOf("\n");
+    if (nl >= 0) {
+      const resp = JSON.parse(buf.slice(0, nl));
+      console.log(JSON.stringify(resp, null, 2));
+      sock.end();
+      process.exit(resp.ok ? 0 : 1);
+    }
+  });
+  sock.on("error", (err) => {
+    console.error(`dais-ctl: ${err.message} (socket: ${SOCKET} — daemon running?)`);
+    process.exit(1);
+  });
+}
+
+main();

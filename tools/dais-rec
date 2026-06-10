@@ -1,0 +1,4 @@
+#!/bin/sh
+# Toggle the dais manual record latch (bind to F10). KDE-safe.
+SOCK="${DAIS_SOCKET:-${XDG_RUNTIME_DIR:-/run/user/$(/usr/bin/id -u)}/dais/control.sock}"
+printf '{"op":"control","action":"toggle-record"}\n' | /usr/bin/socat - "UNIX-CONNECT:$SOCK"

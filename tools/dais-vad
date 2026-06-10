@@ -1,0 +1,4 @@
+#!/bin/sh
+# Toggle the dais VAD session (bind to F9). KDE-safe: no PATH/zsh assumptions.
+SOCK="${DAIS_SOCKET:-${XDG_RUNTIME_DIR:-/run/user/$(/usr/bin/id -u)}/dais/control.sock}"
+printf '{"op":"control","action":"toggle-vad"}\n' | /usr/bin/socat - "UNIX-CONNECT:$SOCK"

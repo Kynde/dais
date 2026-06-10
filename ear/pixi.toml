@@ -1,0 +1,17 @@
+[workspace]
+name = "dais-ear"
+version = "0.1.0"
+description = "dais ear worker: capture + VAD + faster-whisper behind an ndjson stdin/stdout contract."
+channels = ["conda-forge"]
+platforms = ["linux-64"]
+
+[tasks]
+ear = "python dais_ear.py"
+check = "python dais_ear.py --check-deps"
+
+[dependencies]
+python = ">=3.11,<3.13"
+pip = ">=24"
+
+[pypi-dependencies]
+faster-whisper = ">=1.1,<2"

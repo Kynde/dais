@@ -1,0 +1,35 @@
+{;; Router: how an utterance is classified.
+ ;;   :whole-match  command iff the WHOLE utterance matches (default)
+ ;;   :prefix       commands must start with :prefix word; rest is dictation
+ ;;   :key-armed    everything is dictation unless armed via `dais-ctl arm`
+ :router {:strategy :whole-match
+          :prefix "do"
+          ;; Extra whole-utterance commands (merged over built-in defaults).
+          ;; Entries map a phrase to either {:keys [...]} (key sequence) or
+          ;; {:text "..." :submit true/false} (typed reply).
+          :commands {}}
+
+ ;; Dictation submit behavior: :no-enter | :enter-auto | :enter-always
+ :enter-mode :no-enter
+
+ ;; Target slots. :type :tmux needs :pane "session:window.pane";
+ ;; :type :focus delivers to the focused app via ydotool.
+ :targets {1 {:type :focus}
+           2 {:type :tmux :pane "main:0.0"}}
+ :active-slot 1
+
+ :tmux ["tmux"]
+
+ :focus {:ydotool ["/usr/bin/ydotool"]
+         ;; nil -> $XDG_RUNTIME_DIR/.ydotool_socket (the client default)
+         :ydotool-socket nil
+         :key-delay-ms 2}
+
+ :notifications {:enabled true :timeout-ms 2500}
+
+ ;; The resident ear worker (capture/VAD/ASR). :cmd is absolute so a
+ ;; systemd/KDE-launched daemon needs no user PATH.
+ :ear {:enabled? true
+       :cmd ["/home/k/bin/pixi" "run" "-q" "ear"]
+       :dir "ear"}
+ :asr {:model "small.en" :device "cpu" :compute-type "int8" :language "en"}}

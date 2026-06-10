@@ -1,0 +1,8 @@
+events/
+.cpcache/
+.clj-kondo/.cache/
+.lsp/.cache/
+ear/.pixi/
+node_modules/
+*.wav
+.claude/

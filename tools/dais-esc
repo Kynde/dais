@@ -1,0 +1,4 @@
+#!/bin/sh
+# Send Escape to the active dais target immediately (bind to F11). KDE-safe.
+SOCK="${DAIS_SOCKET:-${XDG_RUNTIME_DIR:-/run/user/$(/usr/bin/id -u)}/dais/control.sock}"
+printf '{"op":"control","action":"esc"}\n' | /usr/bin/socat - "UNIX-CONNECT:$SOCK"
