@@ -26,8 +26,16 @@ const out = process.stdout;
 const C = {
   reset: `${ESC}0m`, bold: `${ESC}1m`, dim: `${ESC}2m`,
   green: `${ESC}32m`, red: `${ESC}31m`, yellow: `${ESC}33m`,
-  cyan: `${ESC}36m`, gray: `${ESC}90m`, magenta: `${ESC}35m`,
-  bgGreen: `${ESC}42;30m`, bgRed: `${ESC}41;37m`, bgGray: `${ESC}100;37m`,
+  cyan: `${ESC}36m`, magenta: `${ESC}35m`,
+  // Neutral grays come from the 256-color cube, NOT ANSI bright-black:
+  // Solarized maps bright-black to (near-)background, which made the
+  // separators, waveform baseline and unfilled meter dots invisible.
+  // Indexes ≥16 are never remapped by terminal themes, so these read the
+  // same on solarized dark/light and stock xterm. Semantic colors above
+  // stay themed on purpose.
+  gray: `${ESC}38;5;241m`,
+  bgGreen: `${ESC}42;30m`, bgRed: `${ESC}41;37m`,
+  bgGray: `${ESC}48;5;240m${ESC}38;5;253m`,
 };
 const SPARK = "▁▂▃▄▅▆▇█";
 const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
