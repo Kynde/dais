@@ -2,8 +2,12 @@
 
 Thin clients for the daemon's control socket
 (`$XDG_RUNTIME_DIR/dais/control.sock`, override with `$DAIS_SOCKET`).
-Start the daemon first: `clojure -M:daemon` (add `--dry-run` to plan without
-executing, `--no-ear` to skip the audio worker).
+
+The daemon runs as a `systemd --user` unit (`tools/dais.service`, symlinked
+into `~/.config/systemd/user/` and enabled): `systemctl --user start dais`,
+logs via `journalctl --user -u dais`. Running `clojure -M:daemon` directly is
+the foreground/dev path (add `--dry-run` to plan without executing, `--no-ear`
+to skip the audio worker) — stop the unit first so they don't share a socket.
 
 | Tool | Purpose |
 |------|---------|
