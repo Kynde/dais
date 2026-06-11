@@ -99,7 +99,8 @@ mirrored waveform of the mic (green where the VAD heard speech, cyan ambient,
 flat gray baseline when quiet) with a Silero speech-probability meter (VAD
 mode only — the latch records to a file, so it shows a pulse animation
 instead), target slots with the active one highlighted, the last utterances
-with their outcome (`→ Enter`, `→ typed`, `✗ dropped: …`), and today's
+with their outcome — dictation quoted (`“…” → typed`), interpreted commands
+marked `» … → Enter` in yellow, drops `✗ dropped: …` — and today's
 counters (listened time, utterances, words, drops, mean ASR latency) seeded
 from the event log. A confidence-gated refusal (see `:confidence-min-logprob`
 in `config/dais.edn`) flashes *uncertain — say again?* with the heard text in

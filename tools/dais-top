@@ -97,6 +97,9 @@ function ingest(ev, live) {
     const entry = S.heard.find((h) => h.trace && h.trace === ev.trace_id);
     if (entry) {
       entry.outcome = describeAction(t, p);
+      // What the router made of it — lets the heard list render dictation
+      // (verbatim speech) and commands (interpreted) differently.
+      entry.kind = p.plan?.action;
       if (live) S.flashUntil = Date.now() + 600;
     }
     // Confidence-gated refusal: flash what was heard so repeating is a
@@ -105,6 +108,13 @@ function ingest(ev, live) {
       note(`uncertain — say again? “${p.plan.text ?? ""}”`);
     }
   } else if (t === "control.state_changed") {
+    // Successful voice controls produce a state change, not action.executed —
+    // link it back to the heard entry so "mute" reads as a command there too.
+    const entry = S.heard.find((h) => h.trace && h.trace === ev.trace_id);
+    if (entry) {
+      entry.kind = "control";
+      entry.outcome = `→ ${(p.via ?? "").replace(/^voice:/, "")}`;
+    }
     trackListenTime(p.mode, ev.time, live);
     if (live) {
       S.mode = p.mode ?? S.mode;
@@ -377,8 +387,15 @@ function render() {
         lines.push(`  ${C.dim}${e.time}${C.reset}  ${C.red}✗${C.reset} ${C.dim}dropped: ${e.drop}` +
           (e.text ? ` (“${truncate(e.text, 24)}”)` : "") + C.reset);
       } else {
-        const hl = i === 0 && flash ? C.green : "";
-        lines.push(`  ${C.dim}${e.time}${C.reset}  ${hl}${truncate(e.text, w - 30)}${C.reset} ` +
+        // Dictation is verbatim speech — quoted, plain. A command was
+        // interpreted — yellow » marker so the two read apart at a glance.
+        const isCmd = e.kind && e.kind !== "type-text" && e.kind !== "none";
+        const hl = i === 0 && flash ? C.green : isCmd ? C.yellow : "";
+        const text = truncate(e.text, w - 32);
+        const shown = isCmd
+          ? `${C.yellow}»${C.reset} ${hl}${text}${C.reset}`
+          : `${C.dim}“${C.reset}${hl}${text}${C.reset}${C.dim}”${C.reset}`;
+        lines.push(`  ${C.dim}${e.time}${C.reset}  ${shown} ` +
           `${C.cyan}${e.outcome ?? ""}${C.reset}`);
       }
     });
