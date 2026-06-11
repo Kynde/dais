@@ -39,6 +39,18 @@
   (is (= {:action :press-keys :keys ["Escape"]} (route "cancel")))
   (is (= {:action :type-text :text "yes" :submit true} (route "yes"))))
 
+(deftest macro-command
+  (let [steps [{:text "cd ~/x" :submit true} {:delay 100} {:keys ["C-M-t"]}]
+        cmds (router/merged-commands {"setup" {:macro steps :delay 50}})]
+    (is (= {:action :macro :steps steps :delay 50}
+           (router/route "setup" {:commands cmds})))
+    (testing "step->plan turns step shapes into plans; :delay is not a plan"
+      (is (= {:action :type-text :text "cd ~/x" :submit true}
+             (router/step->plan {:text "cd ~/x" :submit true})))
+      (is (= {:action :press-keys :keys ["C-M-t"]}
+             (router/step->plan {:keys ["C-M-t"]})))
+      (is (nil? (router/step->plan {:delay 100}))))))
+
 (deftest control-commands
   (is (= {:action :control :control :voice-off} (route "voice off")))
   (is (= {:action :control :control :next-target} (route "next target")))

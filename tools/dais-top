@@ -121,6 +121,7 @@ function describeAction(t, p) {
   if (plan.action === "press-keys") return `→ ${(plan.keys ?? []).join(" ")}`;
   if (plan.action === "type-text") return plan.submit ? "→ typed ⏎" : "→ typed";
   if (plan.action === "control") return `→ ${plan.control}`;
+  if (plan.action === "macro") return `→ macro (${plan.steps} steps)`;
   return "→ done";
 }
 

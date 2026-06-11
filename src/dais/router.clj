@@ -12,6 +12,7 @@
     {:action :press-keys :keys [\"Enter\"]}
     {:action :type-text :text \"...\" :submit bool}
     {:action :control :control :voice-off | :next-target | :set-slot (:slot n)}
+    {:action :macro :steps [step ...] :delay ms}   ; config :macro command
     {:action :none :reason \"...\"}"
   (:require [clojure.string :as str]))
 
@@ -107,12 +108,21 @@
       (when-let [n (slot-words w)]
         {:action :control :control :set-slot :slot n}))))
 
+(defn step->plan
+  "A command (or one macro step) -> an executable plan, or nil if the shape is
+  unrecognized (e.g. a {:delay ms} pause step — the macro runner handles those).
+  {:keys [...]} -> press-keys; {:text ...} -> type-text."
+  [step]
+  (cond
+    (:keys step) {:action :press-keys :keys (vec (:keys step))}
+    (:text step) {:action :type-text :text (:text step)
+                  :submit (boolean (:submit step))}))
+
 (defn- command-match [norm commands]
   (when-let [entry (get commands norm)]
-    (cond
-      (:keys entry) {:action :press-keys :keys (vec (:keys entry))}
-      (:text entry) {:action :type-text :text (:text entry)
-                     :submit (boolean (:submit entry))})))
+    (if (:macro entry)
+      {:action :macro :steps (vec (:macro entry)) :delay (:delay entry)}
+      (step->plan entry))))
 
 (defn- as-command [norm commands]
   (or (control-request norm)

@@ -141,6 +141,48 @@
       (is (= "→ C-u" (get-in by-say ["scratch that" "does"])))
       (is (false? (get-in by-say ["scratch that" "config"]))))))
 
+(defn- macro-ctx [macro-cmd]
+  (daemon/make-ctx {:config (assoc-in config [:router :commands] {"go" macro-cmd})
+                    :events-dir (tmp-dir "dais-ev")
+                    :runtime-dir (tmp-dir "dais-rt")
+                    :dry-run true}))
+
+(defn- fire [ctx text]
+  (let [resp (daemon/handle-request
+              ctx {"op" "publish"
+                   "event" (event/make-event {:type "voice.transcript"
+                                              :source {"module" "test"}
+                                              :payload {"text" text}})})]
+    (->> (get resp "events")
+         (filter #(#{"action.executed" "action.error"} (get % "type")))
+         first)))
+
+(deftest macro-runs-steps-in-order
+  ;; active slot 1 is the tmux target; dry-run yields would_run per step.
+  (let [action (fire (macro-ctx {:macro [{:text "one" :submit true}
+                                         {:delay 100}
+                                         {:keys ["C-M-t"]}]
+                                 :delay 0})
+                     "go")
+        results (get-in action ["payload" "results"])]
+    (is (= "action.executed" (get action "type")))
+    (is (= "macro" (get-in action ["payload" "plan" "action"])))
+    (is (= 3 (count results)))
+    (testing "order preserved: type-text, pause, press-keys"
+      (is (= "type-text" (get-in results [0 "plan" "action"])))
+      (is (= 100 (get (nth results 1) "pause_ms")))
+      (is (= "press-keys" (get-in results [2 "plan" "action"])))
+      (is (= ["C-M-t"] (get-in results [2 "plan" "keys"]))))))
+
+(deftest macro-aborts-on-bad-step
+  (let [action (fire (macro-ctx {:macro [{:keys ["Enter"]}
+                                         {:keys ["Nope"]}   ; unknown key -> error
+                                         {:text "never"}]})
+                     "go")]
+    (is (= "action.error" (get action "type")))
+    (is (= 1 (get-in action ["payload" "stopped_at"])) "failed at step index 1")
+    (is (= 2 (count (get-in action ["payload" "results"]))) "third step never ran")))
+
 (deftest target-next-live-skips-dead
   ;; config has slot 1 (tmux, dead) + slot 2 (focus); make only slot 2 live.
   (with-redefs [daemon/target-alive? (fn [_ t] (= :focus (:type t)))]

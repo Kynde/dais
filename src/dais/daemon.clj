@@ -180,6 +180,42 @@
                   (assoc result "plan" (plan->json plan))
                   ids)))
 
+(defn- run-macro!
+  "Execute a :macro plan's steps in order against the active target. A step is an
+  action ({:keys}/{:text}) or a pause ({:delay ms}); between steps the macro's
+  top-level :delay paces. Stops at the first failed (or malformed) step. Sleeps
+  are skipped under dry-run — nothing is delivered, and tests stay fast. Returns
+  one aggregate action.executed / action.error event listing per-step outcomes."
+  [{:keys [state config dry-run] :as _ctx} {:keys [steps delay]} ids]
+  (let [n (count steps)
+        sleep! (fn [ms] (when (and ms (pos? ms) (not dry-run)) (Thread/sleep ms)))
+        macro-plan {"action" "macro" "steps" n}
+        fail (fn [i error done]
+               (notify/notify! config "Dais macro error" error {:icon "dialog-error"})
+               [(daemon-event "action.error"
+                              {"plan" macro-plan "stopped_at" i "error" error "results" done}
+                              ids)])]
+    (loop [[step & more] steps, i 0, done []]
+      (if (nil? step)
+        [(daemon-event "action.executed" {"plan" macro-plan "results" done} ids)]
+        (let [plan (router/step->plan step)]
+          (when (pos? i) (sleep! delay))
+          (cond
+            (and (nil? plan) (:delay step))
+            (do (sleep! (:delay step))
+                (recur more (inc i) (conj done {"pause_ms" (:delay step)})))
+
+            (nil? plan)
+            (fail i (str "Bad macro step: " (pr-str step)) done)
+
+            :else
+            (let [res (assoc (executor/execute plan (state/active-target @state)
+                                               config {:dry-run dry-run})
+                             "plan" (plan->json plan))]
+              (if (= "ok" (get res "result"))
+                (recur more (inc i) (conj done res))
+                (fail i (get res "error") (conj done res))))))))))
+
 (defn- control-transition [control slot]
   (case control
     :voice-off state/voice-off
@@ -204,6 +240,7 @@
                                 {"stage" "control" "error" (get res "error")
                                  "plan" (plan->json plan)}
                                 ids)]))
+    :macro (run-macro! ctx plan ids)
     [(execute-plan! ctx plan ids)]))
 
 (defn- route-opts [{:keys [config commands state]}]

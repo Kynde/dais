@@ -176,6 +176,30 @@ unchanged — speech can never synthesize a `M-`/`C-M-` chord.
 `:description` is a one-liner listed under **configured** in the dais-top `?`
 help overlay (without it, the overlay shows the synthesized effect).
 
+A `:macro` runs an ordered list of steps against the active target — each step
+is `{:text … :submit …}`, `{:keys […]}`, or `{:delay ms}` (a pause). Top-level
+`:delay` paces between steps; a `{:delay ms}` step is an explicit wait. Steps
+run synchronously and stop at the first failure.
+
+```clojure
+"setup leanheat"
+{:description "cd into leanheat-app, new window, launch claude"
+ :macro [{:text "cd ~/code/lh/leanheat-app" :submit true}
+         {:text "tn app" :submit true}
+         {:text "aclaude" :submit true}]
+ :delay 120}                       ; ms between steps
+
+"new terminal"
+{:description "open a terminal, then maximize (focus target)"
+ :macro [{:keys ["C-M-t"]}
+         {:delay 400}              ; wait for the window
+         {:keys ["C-M-Right"]}]}
+```
+
+A macro fires like any command — say its phrase, or `dais-ctl inject "<phrase>"`.
+It runs entirely against whichever target is active, so point the right slot
+first (tmux pane for typing, `focus` for window-manager chords).
+
 ## Statusline integration
 
 `$XDG_RUNTIME_DIR/dais/` holds `state.json` plus marker files meant for
