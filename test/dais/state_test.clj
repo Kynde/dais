@@ -76,14 +76,27 @@
       (spit (str dir "/targets.edn") (pr-str {:targets {1 {:type :focus}} :active-slot 9}))
       (is (nil? (state/load-targets dir))))))
 
+(deftest mute-and-dry-run-transitions
+  (let [st (state/initial-state config)]
+    (is (false? (:muted st)))
+    (is (true? (:muted (:state (state/mute st)))))
+    (is (false? (:muted (:state (state/unmute (assoc st :muted true))))))
+    (testing "dry-run toggles from its seeded value"
+      (is (true? (:dry-run (:state (state/toggle-dry-run (assoc st :dry-run false))))))
+      (is (false? (:dry-run (:state (state/toggle-dry-run (assoc st :dry-run true)))))))))
+
 (deftest state-files
   (let [dir (str (System/getProperty "java.io.tmpdir") "/dais-state-test-" (random-uuid))
-        st (assoc (state/initial-state config) :mode :vad-listening :speech true)]
+        st (assoc (state/initial-state config) :mode :vad-listening :speech true
+                  :muted true :dry-run true)]
     (state/write-files! dir st)
     (is (.exists (java.io.File. dir "state.json")))
     (is (.exists (java.io.File. dir "mic-recording")))
     (is (.exists (java.io.File. dir "speech-detected")))
+    (is (.exists (java.io.File. dir "muted")))
+    (is (.exists (java.io.File. dir "dry-run")))
     (state/write-files! dir (state/initial-state config))
     (is (not (.exists (java.io.File. dir "mic-recording"))))
-    (is (not (.exists (java.io.File. dir "speech-detected"))))
-    (state/cleanup-files! dir)))
+    (is (not (.exists (java.io.File. dir "muted"))))
+    (state/cleanup-files! dir)
+    (is (not (.exists (java.io.File. dir "dry-run"))))))

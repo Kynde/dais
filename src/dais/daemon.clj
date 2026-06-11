@@ -153,6 +153,8 @@
          "event" (daemon-event "control.state_changed"
                                {"via" via
                                 "mode" (name (:mode new-state))
+                                "muted" (boolean (:muted new-state))
+                                "dry_run" (boolean (:dry-run new-state))
                                 "active_slot" (:active-slot new-state)
                                 "target" (target-label new-state)}
                                ids)}))))
@@ -169,9 +171,10 @@
 (defn- execute-plan!
   "Run a :type-text/:press-keys plan via the executor against the active
   target. Returns the action.executed / action.error event."
-  [{:keys [state config dry-run] :as _ctx} plan ids]
-  (let [target (state/active-target @state)
-        result (executor/execute plan target config {:dry-run dry-run})
+  [{:keys [state config] :as _ctx} plan ids]
+  (let [st @state
+        result (executor/execute plan (state/active-target st) config
+                                 {:dry-run (:dry-run st)})
         ok? (= "ok" (get result "result"))]
     (when-not ok?
       (notify/notify! config "Dais error" (get result "error")
@@ -186,8 +189,9 @@
   top-level :delay paces. Stops at the first failed (or malformed) step. Sleeps
   are skipped under dry-run — nothing is delivered, and tests stay fast. Returns
   one aggregate action.executed / action.error event listing per-step outcomes."
-  [{:keys [state config dry-run] :as _ctx} {:keys [steps delay]} ids]
-  (let [n (count steps)
+  [{:keys [state config] :as _ctx} {:keys [steps delay]} ids]
+  (let [dry-run (:dry-run @state)
+        n (count steps)
         sleep! (fn [ms] (when (and ms (pos? ms) (not dry-run)) (Thread/sleep ms)))
         macro-plan {"action" "macro" "steps" n}
         fail (fn [i error done]
@@ -216,11 +220,25 @@
                 (recur more (inc i) (conj done res))
                 (fail i (get res "error") (conj done res))))))))))
 
+(defn- control-help
+  "One-line description of a control action for the dais-top help overlay."
+  [kw]
+  (get {:voice-off "stop listening (until F9 / latch)"
+        :next-target "cycle to the next target slot"
+        :set-slot "switch target slot"
+        :mute "ignore everything heard until \"unmute\""
+        :unmute "resume routing after mute"
+        :toggle-dry-run "toggle dry-run (route & show, don't deliver)"}
+       kw (str "control: " (name kw))))
+
 (defn- control-transition [control slot]
   (case control
     :voice-off state/voice-off
     :next-target state/next-slot
     :set-slot #(state/set-slot % slot)
+    :mute state/mute
+    :unmute state/unmute
+    :toggle-dry-run state/toggle-dry-run
     nil))
 
 (defn- dispatch-plan!
@@ -249,7 +267,8 @@
      :prefix (get-in config [:router :prefix] "do")
      :commands commands
      :enter-mode (:enter-mode st :no-enter)
-     :armed (:armed st)}))
+     :armed (:armed st)
+     :muted (:muted st)}))
 
 (defn- handle-publish
   [{:keys [state] :as ctx} {:strs [event]}]
@@ -280,12 +299,15 @@
 (defn- handle-control
   [ctx {:strs [action]}]
   (case action
-    ("toggle-vad" "toggle-record" "voice-off" "arm")
+    ("toggle-vad" "toggle-record" "voice-off" "arm" "mute" "unmute" "toggle-dry-run")
     (let [f (case action
               "toggle-vad" state/toggle-vad
               "toggle-record" state/toggle-record
               "voice-off" state/voice-off
-              "arm" state/arm)
+              "arm" state/arm
+              "mute" state/mute
+              "unmute" state/unmute
+              "toggle-dry-run" state/toggle-dry-run)
           res (transition! ctx f action nil)]
       (when-let [ev (get res "event")]
         (record! ctx ev))
@@ -456,7 +478,7 @@
 (defn handle-request
   "Public for tests. Serialized: requests are quick and state transitions
   must not interleave."
-  [{:keys [events-dir dry-run state] :as ctx} req]
+  [{:keys [events-dir state] :as ctx} req]
   (locking handler-lock
     (case (get req "op")
       "publish" (handle-publish ctx req)
@@ -466,9 +488,11 @@
       "query" (case (get req "query")
                 "status" (let [st @state]
                            {"ok" true "status" "running"
-                            "execution" (if dry-run "dry-run" "live")
+                            "execution" (if (:dry-run st) "dry-run" "live")
                             "mode" (name (:mode st))
                             "armed" (boolean (:armed st))
+                            "muted" (boolean (:muted st))
+                            "dry_run" (boolean (:dry-run st))
                             "active_slot" (:active-slot st)
                             "target" (target-label st)
                             "ear_alive" (boolean (some-> (:ear ctx) deref ear/alive?))
@@ -486,6 +510,7 @@
                       describe (fn [entry]
                                  (cond
                                    (:description entry) (:description entry)
+                                   (:control entry) (control-help (:control entry))
                                    (:macro entry) (str "macro · " (count (:macro entry)) " steps")
                                    (:keys entry) (str "→ " (str/join " " (:keys entry)))
                                    :else (str "type " (pr-str (:text entry))
@@ -493,18 +518,22 @@
                       ;; Phrases defined in config (normalized to match the merged
                       ;; map's keys) — the rest are router/default-commands built-ins.
                       config-phrases (set (map router/normalize
-                                               (keys (get-in (:config ctx) [:router :commands]))))]
+                                               (keys (get-in (:config ctx) [:router :commands]))))
+                      entries (sort-by key (:commands ctx))
+                      control? (fn [[_ entry]] (boolean (:control entry)))
+                      to-row (fn [[say entry]] {"say" say "does" (describe entry)
+                                                "config" (contains? config-phrases say)})
+                      [tsay tdoes] (:target-switch vocab)]
                   {"ok" true
                    "strategy" (name (:strategy st :whole-match))
                    "enter_mode" (name (:enter-mode st :no-enter))
                    "prefix" (get-in (:config ctx) [:router :prefix] "do")
-                   "controls" (mapv (fn [[say does]] {"say" say "does" does})
-                                    (:controls vocab))
-                   "commands" (mapv (fn [[say entry]]
-                                      {"say" say
-                                       "does" (describe entry)
-                                       "config" (contains? config-phrases say)})
-                                    (sort-by key (:commands ctx)))
+                   ;; Controls (escape-hatch :control commands) listed apart from
+                   ;; the typing/keys/macro commands; the parametric target switch
+                   ;; isn't a command phrase, so it's appended explicitly.
+                   "controls" (conj (mapv to-row (filter control? entries))
+                                    {"say" tsay "does" tdoes "config" false})
+                   "commands" (mapv to-row (remove control? entries))
                    "keypress" {"triggers" (:triggers vocab)
                                "keys" (:keys vocab)
                                "ignored" (:ignored vocab)}})
@@ -519,15 +548,17 @@
   [{:keys [config events-dir runtime-dir state-dir dry-run]}]
   {:config config
    :commands (router/merged-commands (get-in config [:router :commands]))
-   :state (atom (merge (state/initial-state config)
-                       (when state-dir (state/load-targets state-dir))))
+   ;; dry-run is runtime-togglable, so it lives in state (seeded from the launch
+   ;; flag) rather than as an immutable ctx field.
+   :state (atom (-> (state/initial-state config)
+                    (merge (when state-dir (state/load-targets state-dir)))
+                    (assoc :dry-run (boolean dry-run))))
    :ear (atom nil)
    :subscribers (atom #{})
    :last-heard (atom (System/currentTimeMillis))
    :events-dir events-dir
    :runtime-dir runtime-dir
-   :state-dir state-dir
-   :dry-run (boolean dry-run)})
+   :state-dir state-dir})
 
 (defn- on-ear-event
   "Handle one event from the ear worker's stdout. Transcripts run the full

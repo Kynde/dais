@@ -103,8 +103,8 @@ utterances, words, drops, mean ASR latency) seeded from the event log.
 
 Control keys: `v` VAD toggle · `r` record latch · `Esc` send Escape ·
 `1`–`5` switch target · `Tab` next live target (skips dead ones) ·
-`t` pane picker · `a` arm · `e` cycle enter-mode ·
-`s` cycle router strategy · `?` help · `q` quit. Press `?` for a full
+`t` pane picker · `a` arm · `m` mute (warm pause) · `d` dry-run toggle ·
+`e` cycle enter-mode · `s` cycle router strategy · `?` help · `q` quit. Press `?` for a full
 key + voice-command reference — it also lists the unobtrusive cycle keys
 (`>` next / `<` prev target) and your config commands, pulled live from the
 daemon so the list never drifts from `config/dais.edn`. The `e`/`s` toggles (also
@@ -118,11 +118,15 @@ meter via `set_levels` on subscriber transitions) — zero overhead.
 
 ## Voice commands
 
-Daemon controls (work in every router strategy):
+Daemon controls — `{:control kw}` commands, recognized in every router strategy
+(unprefixed/unarmed escape hatches). These are built-in default commands; bind
+your own phrases to the same actions in config (see Configuring commands):
 
 | Say | Effect |
 |------|---------|
 | "voice off" / "dais off" | stop listening (in-flight latch recording is discarded) |
+| "mute" / "unmute" | warm pause: mic stays on but every utterance is dropped until "unmute" |
+| "toggle dry run" | flip dry-run: utterances still route and show in dais-top, but nothing reaches the target |
 | "next target" | cycle target slot |
 | "target two" (one–five, ordinals, digits) | switch slot |
 
@@ -161,8 +165,15 @@ Add your own under `config/dais.edn` `:router :commands` — a phrase maps to:
 {"clear"        {:keys ["C-u"]}                      ; press a key / chord
  "say hi"       {:text "hello" :submit true}         ; type text, then Enter
  "new terminal" {:keys ["C-M-t"]                     ; ctrl-alt-t (focus target)
-                 :description "open a terminal"}}     ; shown in dais-top ?
+                 :description "open a terminal"}      ; shown in dais-top ?
+ "shush"        {:control :mute}}                     ; a daemon control (alias)
 ```
+
+A `{:control kw}` entry runs a daemon control instead of delivering to the
+target — `:voice-off`, `:next-target`, `:mute`, `:unmute`, `:toggle-dry-run`.
+The built-in phrases above are just default `:control` commands, so this is how
+you add your own aliases (e.g. "shush" → mute). Control commands are escape
+hatches: they work in every strategy, unprefixed and unarmed.
 
 Keypress **chords** are tmux-style: modifier prefixes `C-` ctrl, `M-` alt,
 `S-` shift, `s-` super, then a base key — letters, digits, `Enter` `Escape`
@@ -208,4 +219,6 @@ first (tmux pane for typing, `focus` for window-manager chords).
 ```sh
 [ -f "$XDG_RUNTIME_DIR/dais/mic-recording" ] && echo "🎤"
 [ -f "$XDG_RUNTIME_DIR/dais/speech-detected" ] && echo "🗣"
+[ -f "$XDG_RUNTIME_DIR/dais/muted" ]          && echo "🔇"
+[ -f "$XDG_RUNTIME_DIR/dais/dry-run" ]         && echo "DRY"
 ```

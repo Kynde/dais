@@ -183,6 +183,45 @@
     (is (= 1 (get-in action ["payload" "stopped_at"])) "failed at step index 1")
     (is (= 2 (count (get-in action ["payload" "results"]))) "third step never ran")))
 
+(deftest mute-drops-utterances
+  ;; *ctx* is dry-run; mute via the control op (dais-top key / dais-ctl path).
+  (is (true? (get (req {"op" "control" "action" "mute"}) "ok")))
+  (is (true? (get (req {"op" "query" "query" "status"}) "muted")))
+  (testing "muted: utterance dropped, not routed to a plan"
+    (let [resp (inject "press enter")]
+      (is (= "none" (get-in resp ["plan" "action"])))
+      (is (= "muted" (get-in resp ["plan" "reason"])))))
+  (testing "unmute resumes routing"
+    (is (true? (get (req {"op" "control" "action" "unmute"}) "ok")))
+    (is (false? (get (req {"op" "query" "query" "status"}) "muted")))
+    (is (= "press-keys" (get-in (inject "press enter") ["plan" "action"])))))
+
+(deftest dry-run-toggle-changes-delivery
+  (testing "fixture starts dry-run: plan only, would_run present, nothing executed"
+    (let [action (second (get (inject "press enter") "events"))]
+      (is (= "action.executed" (get action "type")))
+      (is (true? (get-in action ["payload" "dry_run"])))))
+  (testing "toggle to live: executor really runs and fails on the scratch pane"
+    (req {"op" "control" "action" "toggle-dry-run"})
+    (is (= "live" (get (req {"op" "query" "query" "status"}) "execution")))
+    (let [action (second (get (inject "press enter") "events"))]
+      (is (= "action.error" (get action "type")))
+      (is (re-find #"not found" (get-in action ["payload" "error"]))))))
+
+(deftest query-commands-partitions-controls
+  (let [resp (req {"op" "query" "query" "commands"})
+        controls (set (map #(get % "say") (get resp "controls")))
+        commands (set (map #(get % "say") (get resp "commands")))]
+    (testing ":control commands are listed as controls"
+      (is (contains? controls "voice off"))
+      (is (contains? controls "mute"))
+      (is (contains? controls "unmute"))
+      (is (contains? controls "toggle dry run"))
+      (is (contains? controls "target one … five")))   ; parametric descriptor appended
+    (testing "typing/keys commands stay in commands"
+      (is (contains? commands "scratch that"))
+      (is (not (contains? commands "voice off"))))))
+
 (deftest target-next-live-skips-dead
   ;; config has slot 1 (tmux, dead) + slot 2 (focus); make only slot 2 live.
   (with-redefs [daemon/target-alive? (fn [_ t] (= :focus (:type t)))]

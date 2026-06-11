@@ -4,7 +4,7 @@
 //   DAIS_SOCKET=...  socket override (default $XDG_RUNTIME_DIR/dais/control.sock)
 //
 // Keys: v VAD · r latch · Esc escape · 1-5 target · Tab next-live · t pick
-//       a arm · e enter-mode · s strategy · ? help · q quit
+//       a arm · m mute · d dry-run · e enter-mode · s strategy · ? help · q quit
 //       (hidden, in ? overlay: > next target · < prev target)
 //
 // Entirely optional: the daemon runs identically without it. Subscribing
@@ -38,7 +38,8 @@ const S = {
   mode: "off",            // off | vad-listening | manual-recording
   modeSince: Date.now(),
   armed: false,
-  execution: "?",
+  muted: false,           // warm pause: mic on, utterances dropped until unmute
+  execution: "?",         // "live" | "dry-run" (runtime-togglable)
   earAlive: false,
   strategy: "?",
   enterMode: "?",
@@ -102,6 +103,8 @@ function ingest(ev, live) {
     if (live) {
       S.mode = p.mode ?? S.mode;
       if (p.active_slot != null) S.activeSlot = p.active_slot;
+      if (p.muted != null) S.muted = p.muted;
+      if (p.dry_run != null) S.execution = p.dry_run ? "dry-run" : "live";
     }
   } else if (live && t === "asr.speech_start") {
     S.speech = true;
@@ -207,7 +210,7 @@ function seed() {
     request({ op: "query", query: "status" }, (st) => {
       if (!st?.ok) return;
       S.mode = st.mode; S.armed = st.armed; S.execution = st.execution;
-      S.earAlive = st.ear_alive; S.strategy = st.strategy;
+      S.muted = st.muted; S.earAlive = st.ear_alive; S.strategy = st.strategy;
       S.enterMode = st.enter_mode; S.activeSlot = st.active_slot;
       // status says we're currently open -> start the live clock now
       if (st.mode !== "off" && openSince == null) openSince = Date.now();
@@ -284,8 +287,9 @@ function render() {
     : "no target";
   const right = `${S.earAlive ? C.green + "ear ✓" : C.red + "ear ✗"}${C.reset}  ` +
     `${S.armed ? C.yellow + "ARMED" : C.dim + "armed –"}${C.reset}  ` +
-    `${C.dim}${S.execution}${C.reset}`;
-  lines.push(` ${C.bold}dais${C.reset} ${modeBadge()}  ${targetStr}   ${right}`);
+    `${S.execution === "dry-run" ? C.bold + C.yellow : C.dim}${S.execution}${C.reset}`;
+  const mutedBadge = S.muted ? ` ${C.bold}${C.yellow}🔇 MUTED${C.reset}` : "";
+  lines.push(` ${C.bold}dais${C.reset} ${modeBadge()}${mutedBadge}  ${targetStr}   ${right}`);
   lines.push(sep);
 
   // mic meter
@@ -376,7 +380,7 @@ function render() {
     ` · ${C.bold}${c.drops}${C.reset} drops · ${asr}` +
     `   ${C.dim}${S.strategy}/${S.enterMode}${C.reset}`);
   const noteStr = Date.now() < S.noteUntil ? `  ${C.yellow}${S.note}${C.reset}` : "";
-  lines.push(` ${C.dim}[v]ad [r]ec [Esc] esc [1-5] target [Tab] next-live [t] pick [a]rm [e]nter-mode [s]trategy [?] help [q]uit${C.reset}${noteStr}`);
+  lines.push(` ${C.dim}[v]ad [r]ec [Esc] esc [1-5] target [Tab] next-live [t] pick [a]rm [m]ute [d]ry-run [e]nter-mode [s]trategy [?] help [q]uit${C.reset}${noteStr}`);
 
   out.write(`${ESC}H${ESC}2J` + lines.slice(0, h).join("\n"));
 }
@@ -401,6 +405,8 @@ function helpBody(w) {
   L.push(key("<", "previous target — cycle"));
   L.push(key("t", "pick a target pane"));
   L.push(key("a", "arm: next utterance must be a command"));
+  L.push(key("m", "toggle mute (warm pause; mic stays on)"));
+  L.push(key("d", "toggle dry-run (route & show, don't deliver)"));
   L.push(key("e", "cycle enter-mode"));
   L.push(key("s", "cycle router strategy"));
   L.push(key("q", "quit"));
@@ -454,6 +460,9 @@ function onKey(key) {
   if (key === "v") request({ op: "control", action: "toggle-vad" }, ack("vad"));
   else if (key === "r") request({ op: "control", action: "toggle-record" }, ack("rec"));
   else if (key === "a") request({ op: "control", action: "arm" }, ack("armed"));
+  else if (key === "m")
+    request({ op: "control", action: S.muted ? "unmute" : "mute" }, ack(S.muted ? "unmuted" : "muted"));
+  else if (key === "d") request({ op: "control", action: "toggle-dry-run" }, ack("dry-run toggled"));
   else if (key === "t") openPicker();
   else if (key === "e") {
     const next = cycle(ENTER_MODES, S.enterMode);
@@ -527,6 +536,7 @@ function ack(what) {
       if (st?.ok) {
         S.armed = st.armed; S.activeSlot = st.active_slot; S.mode = st.mode;
         S.enterMode = st.enter_mode; S.strategy = st.strategy;
+        S.muted = st.muted; S.execution = st.execution;
       }
     });
   };

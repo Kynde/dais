@@ -15,6 +15,7 @@
   [config]
   {:mode :off
    :armed false
+   :muted false
    :speech false
    :targets (:targets config)
    :active-slot (:active-slot config 1)
@@ -51,6 +52,14 @@
 (defn arm [state]
   {:state (assoc state :armed true)})
 
+(defn mute [state] {:state (assoc state :muted true)})
+(defn unmute [state] {:state (assoc state :muted false)})
+
+(defn toggle-dry-run
+  "Flip the runtime dry-run flag (seeded from the launch flag in make-ctx)."
+  [state]
+  {:state (update state :dry-run not)})
+
 (defn set-slot [state n]
   (if (get-in state [:targets n])
     {:state (assoc state :active-slot n)}
@@ -85,6 +94,8 @@
     (spit sj (json/write-str
               {"mode" (name (:mode state))
                "armed" (boolean (:armed state))
+               "muted" (boolean (:muted state))
+               "dry_run" (boolean (:dry-run state))
                "speech" (boolean (:speech state))
                "active_slot" (:active-slot state)
                "target" (target-label (active-target state))
@@ -95,13 +106,15 @@
                    (let [f (io/file dir fname)]
                      (if on? (spit f "") (io/delete-file f true))))]
       (marker "mic-recording" (mic-open? state))
-      (marker "speech-detected" (boolean (:speech state))))))
+      (marker "speech-detected" (boolean (:speech state)))
+      (marker "muted" (boolean (:muted state)))
+      (marker "dry-run" (boolean (:dry-run state))))))
 
 (defn cleanup-files!
   "Remove socket-adjacent state artifacts on shutdown (markers say nothing is
   recording once the daemon is gone)."
   [dir]
-  (doseq [fname ["mic-recording" "speech-detected"]]
+  (doseq [fname ["mic-recording" "speech-detected" "muted" "dry-run"]]
     (io/delete-file (io/file dir fname) true)))
 
 ;; --- durable target persistence ---

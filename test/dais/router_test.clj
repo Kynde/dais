@@ -49,15 +49,32 @@
              (router/step->plan {:text "cd ~/x" :submit true})))
       (is (= {:action :press-keys :keys ["C-M-t"]}
              (router/step->plan {:keys ["C-M-t"]})))
+      (is (= {:action :control :control :mute} (router/step->plan {:control :mute})))
       (is (nil? (router/step->plan {:delay 100}))))))
 
 (deftest control-commands
+  ;; voice-off / next-target / mute / unmute / dry-run are now :control commands
+  ;; (default-commands), not hardcoded router phrases.
   (is (= {:action :control :control :voice-off} (route "voice off")))
   (is (= {:action :control :control :next-target} (route "next target")))
   (is (= {:action :control :control :set-slot :slot 2} (route "target two")))
-  (testing "voice off works in every strategy"
+  (is (= {:action :control :control :mute} (route "mute")))
+  (is (= {:action :control :control :unmute} (route "unmute")))
+  (is (= {:action :control :control :toggle-dry-run} (route "toggle dry run")))
+  (testing "control commands are escape hatches: work unprefixed/unarmed in every strategy"
     (is (= :control (:action (route "voice off" :strategy :prefix))))
-    (is (= :control (:action (route "voice off" :strategy :key-armed))))))
+    (is (= :control (:action (route "mute" :strategy :key-armed))))
+    (is (= :control (:action (route "target two" :strategy :prefix))))))
+
+(deftest muted-mode
+  (testing "muted drops everything except unmute / voice off"
+    (is (= {:action :none :reason "muted"} (route "press enter" :muted true)))
+    (is (= {:action :none :reason "muted"} (route "hello world" :muted true)))
+    (is (= :unmute (:control (route "unmute" :muted true))))
+    (is (= :voice-off (:control (route "voice off" :muted true)))))
+  (testing "muted blocks other controls too (only unmute/voice-off escape)"
+    (is (= :none (:action (route "next target" :muted true))))
+    (is (= :none (:action (route "mute" :muted true))))))
 
 (deftest dictation-and-enter-modes
   (testing "default: type only, no submit, single line"

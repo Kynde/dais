@@ -43,12 +43,20 @@
 
 (def default-commands
   "Built-in whole-utterance commands; config :router :commands merges over
-  these. {:keys [...]} presses a key sequence, {:text ...} types a reply."
+  these. {:keys [...]} presses a key sequence, {:text ...} types a reply,
+  {:control kw} runs a daemon control (always-on escape hatch, see route)."
   {"scratch that" {:keys ["C-u"]}
    "cancel" {:keys ["Escape"]}
    "stop" {:keys ["Escape"]}
    "yes" {:text "yes" :submit true}
-   "no" {:text "no" :submit true}})
+   "no" {:text "no" :submit true}
+   ;; Daemon controls — recognized in every strategy, unprefixed/unarmed.
+   "voice off" {:control :voice-off}
+   "dais off" {:control :voice-off}
+   "next target" {:control :next-target}
+   "mute" {:control :mute}
+   "unmute" {:control :unmute}
+   "toggle dry run" {:control :toggle-dry-run}})
 
 (defn normalize
   "Lowercase, strip punctuation to spaces, collapse whitespace. Used for
@@ -96,27 +104,24 @@
    "1" 1 "2" 2 "3" 3 "4" 4 "5" 5
    "first" 1 "second" 2 "third" 3 "fourth" 4 "fifth" 5})
 
-(defn control-request
-  "Daemon-level voice commands. These work in every strategy — \"voice off\"
-  must always be an escape hatch."
+(defn- target-request
+  "Parametric \"target <one..five>\" -> a :set-slot control plan. Stays a
+  dedicated matcher since it can't be a static command phrase."
   [norm]
-  (cond
-    (#{"voice off" "dais off"} norm) {:action :control :control :voice-off}
-    (= "next target" norm) {:action :control :control :next-target}
-    :else
-    (when-let [[_ w] (re-matches #"target (\w+)" norm)]
-      (when-let [n (slot-words w)]
-        {:action :control :control :set-slot :slot n}))))
+  (when-let [[_ w] (re-matches #"target (\w+)" norm)]
+    (when-let [n (slot-words w)]
+      {:action :control :control :set-slot :slot n})))
 
 (defn step->plan
   "A command (or one macro step) -> an executable plan, or nil if the shape is
   unrecognized (e.g. a {:delay ms} pause step — the macro runner handles those).
-  {:keys [...]} -> press-keys; {:text ...} -> type-text."
+  {:keys [...]} -> press-keys; {:text ...} -> type-text; {:control kw} -> control."
   [step]
   (cond
     (:keys step) {:action :press-keys :keys (vec (:keys step))}
     (:text step) {:action :type-text :text (:text step)
-                  :submit (boolean (:submit step))}))
+                  :submit (boolean (:submit step))}
+    (:control step) {:action :control :control (:control step)}))
 
 (defn- command-match [norm commands]
   (when-let [entry (get commands norm)]
@@ -124,9 +129,18 @@
       {:action :macro :steps (vec (:macro entry)) :delay (:delay entry)}
       (step->plan entry))))
 
+(defn- escape-hatch
+  "Commands honored in EVERY strategy, unprefixed/unarmed: any command resolving
+  to a :control plan, plus the parametric target switch. \"voice off\"/\"unmute\"
+  must always be reachable, so these bypass prefix/arm gating."
+  [norm commands]
+  (let [plan (command-match norm commands)]
+    (or (when (= :control (:action plan)) plan)
+        (target-request norm))))
+
 (defn- as-command [norm commands]
-  (or (control-request norm)
-      (command-match norm commands)
+  (or (command-match norm commands)
+      (target-request norm)
       (when-let [ks (keypress-request norm)]
         {:action :press-keys :keys ks})))
 
@@ -161,18 +175,12 @@
   (into {} (map (fn [[k v]] [(normalize k) v])
                 (merge default-commands config-commands))))
 
-(def control-phrases
-  "Always-available daemon voice commands, for help UIs. Description only —
-  the matching logic lives in control-request; keep the two in sync."
-  [["voice off / dais off" "stop listening"]
-   ["next target"          "cycle to the next target slot"]
-   ["target one … five"    "switch to that slot (digits & ordinals too)"]])
-
 (defn vocabulary
-  "Static voice-command reference for help UIs. Callers layer on the live
-  merged :commands map (it is config-dependent) and the active strategy."
+  "Static keypress-grammar reference for help UIs. Control commands are now
+  ordinary :control commands (derived from the live command map by the caller),
+  so they're no longer listed here — only the parametric target switch is."
   []
-  {:controls control-phrases
+  {:target-switch ["target one … five" "switch to that slot (digits & ordinals too)"]
    :triggers (vec (sort keypress-triggers))
    :ignored  (vec (sort connective-fillers))
    :keys     (vec (sort (distinct (vals key-words))))})
@@ -187,13 +195,21 @@
     :commands   normalized command map (see merged-commands)
     :enter-mode :no-enter | :enter-auto | :enter-always
     :armed      true when the next utterance was armed as command-only
+    :muted      true when muted — drop everything but unmute/voice-off
     :prefix     spoken prefix word for :prefix strategy"
-  [text {:keys [strategy commands enter-mode armed prefix]
+  [text {:keys [strategy commands enter-mode armed muted prefix]
          :or {strategy :whole-match enter-mode :no-enter prefix "do"}}]
   (let [norm (normalize text)]
     (cond
       (str/blank? norm)
       {:action :none :reason "empty transcript"}
+
+      ;; Muted: warm but inert — only an unmute/voice-off escape gets through.
+      muted
+      (let [plan (escape-hatch norm commands)]
+        (if (#{:unmute :voice-off} (:control plan))
+          plan
+          {:action :none :reason "muted"}))
 
       ;; Armed: the utterance MUST be a command; a miss does nothing.
       armed
@@ -210,9 +226,9 @@
         (if-let [rest* (strip-prefix norm prefix)]
           (or (as-command rest* commands)
               {:action :none :reason "prefixed: not a recognized command"})
-          (or (control-request norm)
+          (or (escape-hatch norm commands)
               (dictation text enter-mode)))
 
         :key-armed
-        (or (control-request norm)
+        (or (escape-hatch norm commands)
             (dictation text enter-mode))))))

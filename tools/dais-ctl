@@ -12,6 +12,8 @@
 //   dais-ctl esc                   send Escape to the target    (F11)
 //   dais-ctl off                   force voice off
 //   dais-ctl arm                   next utterance must be a command
+//   dais-ctl mute | unmute         warm pause: drop utterances until unmute
+//   dais-ctl dry-run               toggle dry-run (route & plan, don't deliver)
 //   dais-ctl target set <slot> <session:window.pane|focus|current>
 //   dais-ctl target use <slot>
 //   dais-ctl target next | prev    cycle to the next/previous slot
@@ -175,6 +177,12 @@ function buildRequest(argv) {
       return { op: "control", action: "voice-off" };
     case "arm":
       return { op: "control", action: "arm" };
+    case "mute":
+      return { op: "control", action: "mute" };
+    case "unmute":
+      return { op: "control", action: "unmute" };
+    case "dry-run":
+      return { op: "control", action: "toggle-dry-run" };
     case "shutdown":
       return { op: "control", action: "shutdown" };
     case "target": {
