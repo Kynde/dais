@@ -60,11 +60,13 @@
 
 (defn normalize
   "Lowercase, strip punctuation to spaces, collapse whitespace. Used for
-  command matching only — dictation keeps the original text."
+  command matching only — dictation keeps the original text. Unicode-aware:
+  keeps any letter/digit (\\p{L}/\\p{N}) so non-ASCII command phrases survive
+  (Finnish ä/ö, etc.); an ASCII-only strip would mangle them on both sides."
   [s]
   (-> (or s "")
       str/lower-case
-      (str/replace #"[^a-z0-9]+" " ")
+      (str/replace #"[^\p{L}\p{N}]+" " ")
       str/trim))
 
 (def ^:private ctrl-letters
@@ -121,7 +123,10 @@
     (:keys step) {:action :press-keys :keys (vec (:keys step))}
     (:text step) {:action :type-text :text (:text step)
                   :submit (boolean (:submit step))}
-    (:control step) {:action :control :control (:control step)}))
+    ;; :to carries the target for :set-language ({:control :set-language :to "fi"});
+    ;; it is distinct from a command's :lang phrase-language tag (see route).
+    (:control step) (cond-> {:action :control :control (:control step)}
+                      (:to step) (assoc :to (:to step)))))
 
 (defn- command-match [norm commands]
   (when-let [entry (get commands norm)]
@@ -175,6 +180,15 @@
   (into {} (map (fn [[k v]] [(normalize k) v])
                 (merge default-commands config-commands))))
 
+(defn commands-for-lang
+  "Keep only commands live for the utterance's language. A command's :lang
+  (default = base-lang) is the language its phrase belongs to; an untagged
+  command belongs to the base language. A phrase only matters when its
+  language is the one being transcribed, so this is the join between
+  \"language heard\" and \"commands that apply.\""
+  [commands lang base-lang]
+  (into {} (filter (fn [[_ entry]] (= lang (get entry :lang base-lang))) commands)))
+
 (defn vocabulary
   "Static keypress-grammar reference for help UIs. Control commands are now
   ordinary :control commands (derived from the live command map by the caller),
@@ -196,10 +210,14 @@
     :enter-mode :no-enter | :enter-auto | :enter-always
     :armed      true when the next utterance was armed as command-only
     :muted      true when muted — drop everything but unmute/voice-off
-    :prefix     spoken prefix word for :prefix strategy"
-  [text {:keys [strategy commands enter-mode armed muted prefix]
-         :or {strategy :whole-match enter-mode :no-enter prefix "do"}}]
-  (let [norm (normalize text)]
+    :prefix     spoken prefix word for :prefix strategy
+    :lang       language of THIS utterance (forced active, or detected under
+                autodetect); defaults to :base-lang
+    :base-lang  language an untagged command belongs to (default \"en\")"
+  [text {:keys [strategy commands enter-mode armed muted prefix lang base-lang]
+         :or {strategy :whole-match enter-mode :no-enter prefix "do" base-lang "en"}}]
+  (let [commands (commands-for-lang commands (or lang base-lang) base-lang)
+        norm (normalize text)]
     (cond
       (str/blank? norm)
       {:action :none :reason "empty transcript"}

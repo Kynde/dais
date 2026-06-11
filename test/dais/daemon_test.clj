@@ -343,6 +343,57 @@
     (is (false? (get (req {"op" "settings" "enter_mode" "bogus"}) "ok")))
     (is (false? (get (req {"op" "settings"}) "ok")))))
 
+(deftest language-settings
+  (testing "status reports the default language and the selectable set (+ auto)"
+    (let [st (req {"op" "query" "query" "status"})]
+      (is (= "en" (get st "language")))
+      (is (= ["en" "auto"] (get st "languages")))))   ; config has no :asr -> ["en"]
+  (testing "auto is always selectable; an off-list language is rejected"
+    (is (true? (get (req {"op" "settings" "language" "auto"}) "ok")))
+    (is (= "auto" (get (req {"op" "query" "query" "status"}) "language")))
+    (is (false? (get (req {"op" "settings" "language" "fi"}) "ok"))))
+  (testing "settings with nothing to set is still rejected"
+    (is (false? (get (req {"op" "settings"}) "ok")))))
+
+(defn- lang-ctx [extra-commands]
+  (daemon/make-ctx {:config (-> config
+                                (assoc :asr {:language "en" :languages ["en" "fi"]})
+                                (assoc-in [:router :commands] extra-commands))
+                    :events-dir (tmp-dir "dais-ev")
+                    :runtime-dir (tmp-dir "dais-rt")
+                    :dry-run true}))
+
+(defn- inject-lang [ctx text lang]
+  (daemon/handle-request
+   ctx {"op" "publish"
+        "event" (event/make-event {:type "voice.transcript"
+                                   :source {"module" "test"}
+                                   :payload (cond-> {"text" text} lang (assoc "language" lang))})}))
+
+(deftest language-configured-and-tagged-commands
+  (let [ctx (lang-ctx {"ääni pois" {:control :voice-off :lang "fi"}})
+        r #(daemon/handle-request ctx %)]
+    (testing "status lists the configured languages plus auto"
+      (is (= ["en" "fi" "auto"] (get (r {"op" "query" "query" "status"}) "languages"))))
+    (testing "a configured language can be set"
+      (is (true? (get (r {"op" "settings" "language" "fi"}) "ok")))
+      (is (= "fi" (get (r {"op" "query" "query" "status"}) "language"))))
+    (testing "a :lang fi command fires only when the utterance was heard as fi"
+      (let [resp (inject-lang ctx "ääni pois" "fi")]
+        (is (= "control" (get-in resp ["plan" "action"])))
+        (is (= "voice-off" (get-in resp ["plan" "control"]))))
+      ;; same words reported as English are not that command -> dictation
+      (is (= "type-text" (get-in (inject-lang ctx "ääni pois" "en") ["plan" "action"]))))))
+
+(deftest voice-set-language-control
+  (let [ctx (lang-ctx {"puhu suomea" {:control :set-language :to "fi"}})
+        r #(daemon/handle-request ctx %)
+        resp (inject-lang ctx "puhu suomea" nil)]   ; no language -> base en, command is en
+    (is (= "control" (get-in resp ["plan" "action"])))
+    (is (= "set-language" (get-in resp ["plan" "control"])))
+    (is (= "control.state_changed" (get (second (get resp "events")) "type")))
+    (is (= "fi" (get (r {"op" "query" "query" "status"}) "language")))))
+
 (deftest invalid-and-unknown
   (is (false? (get (req {"op" "publish" "event" {"type" "voice.transcript"}}) "ok")))
   (is (false? (get (req {"op" "nope"}) "ok")))

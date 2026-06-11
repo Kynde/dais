@@ -85,6 +85,25 @@
       (is (true? (:dry-run (:state (state/toggle-dry-run (assoc st :dry-run false))))))
       (is (false? (:dry-run (:state (state/toggle-dry-run (assoc st :dry-run true)))))))))
 
+(deftest language
+  (let [st (state/initial-state config)]
+    (testing "defaults to en with no :asr in config"
+      (is (= "en" (:language st)))
+      (is (= ["en"] (:languages st))))
+    (testing "seeded from :asr"
+      (let [st2 (state/initial-state (assoc config :asr {:language "fi" :languages ["en" "fi"]}))]
+        (is (= "fi" (:language st2)))
+        (is (= ["en" "fi"] (:languages st2)))))
+    (testing "set-language validates against :languages plus always-allowed auto"
+      (let [st2 (assoc st :languages ["en" "fi"])]
+        (is (= "fi" (:language (:state (state/set-language st2 "fi")))))
+        (is (= "auto" (:language (:state (state/set-language st2 "auto")))))
+        (is (some? (:error (state/set-language st2 "de"))))))
+    (testing "write-files! emits the language"
+      (let [dir (str (System/getProperty "java.io.tmpdir") "/dais-lang-" (random-uuid))]
+        (state/write-files! dir (assoc st :language "fi"))
+        (is (re-find #"\"language\":\"fi\"" (slurp (str dir "/state.json"))))))))
+
 (deftest state-files
   (let [dir (str (System/getProperty "java.io.tmpdir") "/dais-state-test-" (random-uuid))
         st (assoc (state/initial-state config) :mode :vad-listening :speech true

@@ -22,6 +22,11 @@
    ;; Runtime-togglable settings (session-only: config wins on restart).
    :enter-mode (:enter-mode config :no-enter)
    :strategy (get-in config [:router :strategy] :whole-match)
+   ;; Transcription language: the forced ASR language ("en"/"fi"/…) or "auto"
+   ;; for per-utterance detection. :languages is the selectable set (for
+   ;; validation); "auto" is always allowed on top of it.
+   :language (get-in config [:asr :language] "en")
+   :languages (vec (get-in config [:asr :languages] ["en"]))
    :last-utterance nil})
 
 (defn active-target [state]
@@ -79,6 +84,14 @@
 (defn set-target [state n target]
   {:state (assoc-in state [:targets n] target)})
 
+(defn set-language
+  "Switch the transcription language. Valid: a configured language or \"auto\".
+  The daemon syncs the ear and persists; this is the pure validation/update."
+  [state lang]
+  (if (or (= "auto" lang) (some #{lang} (:languages state)))
+    {:state (assoc state :language lang)}
+    {:error (str "no language " (pr-str lang))}))
+
 ;; --- on-disk reflection ---
 
 (defn- target-label [t]
@@ -101,6 +114,7 @@
                "target" (target-label (active-target state))
                "enter_mode" (name (:enter-mode state :no-enter))
                "strategy" (name (:strategy state :whole-match))
+               "language" (:language state "en")
                "last_utterance" (:last-utterance state)}))
     (let [marker (fn [fname on?]
                    (let [f (io/file dir fname)]

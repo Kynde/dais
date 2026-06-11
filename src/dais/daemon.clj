@@ -159,6 +159,32 @@
                                 "target" (target-label new-state)}
                                ids)}))))
 
+(defn- set-language!
+  "Switch the transcription language (session-only; config wins on restart).
+  Validates via state, persists, and — crucially — pushes set_language to the
+  resident ear so subsequent transcripts use it WITHOUT a model reload (the
+  multilingual model stays loaded; \"auto\" = per-utterance detection). On
+  success returns {\"ok\" true \"language\" l \"event\" <control.state_changed>};
+  callers record the event. Used by both the settings op (CLI/TUI) and the
+  :set-language voice control."
+  [{:keys [state runtime-dir config] :as ctx} lang ids via]
+  (let [res (state/set-language @state lang)]
+    (if-let [err (:error res)]
+      (do (notify/notify! config "Dais" err {:icon "dialog-warning"})
+          {"ok" false "error" err})
+      (let [new-state (:state res)]
+        (reset! state new-state)
+        (state/write-files! runtime-dir new-state)
+        (when-let [e (some-> (:ear ctx) deref)]
+          (ear/send! e {"type" "set_language"
+                        "language" (when (not= "auto" lang) lang)}))
+        (notify/notify! config "Dais language" (str "transcribing: " lang)
+                        {:icon "preferences-desktop-locale" :urgency "low"})
+        {"ok" true
+         "language" lang
+         "event" (daemon-event "control.state_changed"
+                               {"via" via "language" lang} ids)}))))
+
 (defn- plan->json [plan]
   (cond-> {"action" (name (:action plan))}
     (:text plan) (assoc "text" (:text plan))
@@ -166,6 +192,7 @@
     (:keys plan) (assoc "keys" (vec (:keys plan)))
     (:control plan) (assoc "control" (name (:control plan)))
     (:slot plan) (assoc "slot" (:slot plan))
+    (:to plan) (assoc "to" (:to plan))
     (:reason plan) (assoc "reason" (:reason plan))))
 
 (defn- execute-plan!
@@ -228,7 +255,8 @@
         :set-slot "switch target slot"
         :mute "ignore everything heard until \"unmute\""
         :unmute "resume routing after mute"
-        :toggle-dry-run "toggle dry-run (route & show, don't deliver)"}
+        :toggle-dry-run "toggle dry-run (route & show, don't deliver)"
+        :set-language "switch transcription language"}
        kw (str "control: " (name kw))))
 
 (defn- control-transition [control slot]
@@ -250,8 +278,12 @@
                           "error" (:reason plan)
                           "plan" (plan->json plan)}
                          ids)]
-    :control (let [f (control-transition (:control plan) (:slot plan))
-                   res (transition! ctx f (str "voice:" (name (:control plan))) ids)]
+    ;; :set-language has an ear side effect (not a pure state transition), so it
+    ;; goes through set-language! rather than control-transition/transition!.
+    :control (let [res (if (= :set-language (:control plan))
+                         (set-language! ctx (:to plan) ids "voice:set-language")
+                         (transition! ctx (control-transition (:control plan) (:slot plan))
+                                      (str "voice:" (name (:control plan))) ids))]
                (if (get res "ok")
                  [(get res "event")]
                  [(daemon-event "action.error"
@@ -268,7 +300,11 @@
      :commands commands
      :enter-mode (:enter-mode st :no-enter)
      :armed (:armed st)
-     :muted (:muted st)}))
+     :muted (:muted st)
+     ;; Untagged commands belong to the base language; the utterance's own
+     ;; language (:lang, set per-transcript in handle-publish) selects the
+     ;; live command set.
+     :base-lang (get-in config [:asr :language] "en")}))
 
 (defn- handle-publish
   [{:keys [state] :as ctx} {:strs [event]}]
@@ -280,7 +316,10 @@
     (let [trace-id (or (get event "trace_id") (get event "id"))
           transcript (-> event (assoc "trace_id" trace-id) with-sequence)
           text (get-in event ["payload" "text"])
-          plan (router/route text (route-opts ctx))
+          ;; The transcript reports its own language (forced or autodetected);
+          ;; it selects which language's commands can match this utterance.
+          lang (get-in event ["payload" "language"])
+          plan (router/route text (assoc (route-opts ctx) :lang lang))
           ids {:trace-id trace-id :parent-id (get transcript "id")}]
       ;; Armed is single-shot: consumed by this utterance, hit or miss.
       (swap! state assoc :armed false :last-utterance text)
@@ -442,7 +481,7 @@
   "Runtime toggles for the impulse knobs (session-only; config wins on
   restart). Calibration settings (VAD tuning, idle timeout) deliberately stay
   config-file only."
-  [{:keys [state runtime-dir config] :as ctx} {:strs [enter_mode strategy]}]
+  [{:keys [state runtime-dir config] :as ctx} {:strs [enter_mode strategy language]}]
   (cond
     (and enter_mode (not (enter-mode-values enter_mode)))
     {"ok" false "error" (str "Bad enter_mode " (pr-str enter_mode)
@@ -452,8 +491,15 @@
     {"ok" false "error" (str "Bad strategy " (pr-str strategy)
                              " (whole-match | prefix | key-armed)")}
 
-    (not (or enter_mode strategy))
-    {"ok" false "error" "settings: nothing to set (enter_mode, strategy)"}
+    (not (or enter_mode strategy language))
+    {"ok" false "error" "settings: nothing to set (enter_mode, strategy, language)"}
+
+    ;; Language goes through set-language! for ear sync + validation; unlike
+    ;; enter_mode/strategy it is not a plain session toggle.
+    language
+    (let [res (set-language! ctx language nil "settings")]
+      (when-let [ev (get res "event")] (record! ctx ev))
+      (dissoc res "event"))
 
     :else
     (let [new-state (swap! state
@@ -498,6 +544,10 @@
                             "ear_alive" (boolean (some-> (:ear ctx) deref ear/alive?))
                             "strategy" (name (:strategy st :whole-match))
                             "enter_mode" (name (:enter-mode st :no-enter))
+                            "language" (:language st "en")
+                            ;; Selectable set for the TUI cycle; "auto" is the
+                            ;; always-available autodetect option on top.
+                            "languages" (conj (vec (:languages st ["en"])) "auto")
                             "sequence" (.get sequence-counter)
                             "events_dir" events-dir})
                 "commands"
@@ -519,7 +569,14 @@
                       ;; map's keys) — the rest are router/default-commands built-ins.
                       config-phrases (set (map router/normalize
                                                (keys (get-in (:config ctx) [:router :commands]))))
-                      entries (sort-by key (:commands ctx))
+                      ;; Show only the live command set for the active language
+                      ;; (under "auto" there is no single language, so fall back
+                      ;; to the base) — the help overlay matches what can match.
+                      base-lang (get-in (:config ctx) [:asr :language] "en")
+                      active-lang (let [l (:language st base-lang)]
+                                    (if (= "auto" l) base-lang l))
+                      entries (sort-by key (router/commands-for-lang
+                                            (:commands ctx) active-lang base-lang))
                       control? (fn [[_ entry]] (boolean (:control entry)))
                       to-row (fn [[say entry]] {"say" say "does" (describe entry)
                                                 "config" (contains? config-phrases say)})
@@ -527,6 +584,7 @@
                   {"ok" true
                    "strategy" (name (:strategy st :whole-match))
                    "enter_mode" (name (:enter-mode st :no-enter))
+                   "language" (:language st "en")
                    "prefix" (get-in (:config ctx) [:router :prefix] "do")
                    ;; Controls (escape-hatch :control commands) listed apart from
                    ;; the typing/keys/macro commands; the parametric target switch
@@ -624,13 +682,16 @@
   (when (get-in config [:ear :enabled?] false)
     (let [asr (:asr config)
           audio-dir (.getAbsolutePath (io/file events-dir "audio"))
+          ;; Launch in the currently-selected language (state is config-seeded),
+          ;; so a REPL ear restart mid-session keeps the active language.
+          lang (:language @(:state ctx) (:language asr "en"))
           worker (ear/start!
                   {:cmd (get-in config [:ear :cmd])
                    :dir (get-in config [:ear :dir] "ear")
                    :args (cond-> ["--model" (:model asr "small.en")
                                   "--device" (:device asr "cpu")
                                   "--compute-type" (:compute-type asr "int8")
-                                  "--language" (:language asr "en")
+                                  "--language" lang
                                   "--audio-dir" audio-dir
                                   "--tuning" (json/write-str (or (:vad config) {}))]
                            (:source asr) (into ["--source" (:source asr)]))}

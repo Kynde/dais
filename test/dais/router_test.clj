@@ -112,3 +112,32 @@
 (deftest empty-transcripts
   (is (= :none (:action (route ""))))
   (is (= :none (:action (route "  ...  ")))))
+
+(deftest unicode-normalize
+  (testing "non-ASCII letters survive (Finnish ä/ö) — an ASCII-only strip mangled them"
+    (is (= "ääni pois" (router/normalize "Ääni, pois!")))
+    (is (= "työ" (router/normalize "TYÖ"))))
+  (testing "still collapses punctuation/whitespace as before"
+    (is (= "press enter" (router/normalize "Press,  enter.")))))
+
+(deftest language-tagged-commands
+  (let [cmds (router/merged-commands {"ääni pois" {:control :voice-off :lang "fi"}})]
+    (testing "a :lang fi command matches only when the utterance language is fi"
+      (is (= {:action :control :control :voice-off}
+             (router/route "ääni pois" {:commands cmds :lang "fi" :base-lang "en"})))
+      (is (= :type-text
+             (:action (router/route "ääni pois" {:commands cmds :lang "en" :base-lang "en"})))))
+    (testing "untagged commands belong to the base language, not to fi"
+      (is (= :control (:action (router/route "voice off" {:commands cmds :lang "en" :base-lang "en"}))))
+      (is (= :type-text (:action (router/route "voice off" {:commands cmds :lang "fi" :base-lang "en"})))))
+    (testing "missing :lang defaults to the base language (en)"
+      (is (= :control (:action (router/route "voice off" {:commands cmds})))))))
+
+(deftest set-language-control
+  (testing "step->plan carries the :to target language"
+    (is (= {:action :control :control :set-language :to "fi"}
+           (router/step->plan {:control :set-language :to "fi"}))))
+  (testing "a config command routes to a :set-language control"
+    (let [cmds (router/merged-commands {"puhu suomea" {:control :set-language :to "fi"}})]
+      (is (= {:action :control :control :set-language :to "fi"}
+             (router/route "puhu suomea" {:commands cmds}))))))

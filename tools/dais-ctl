@@ -24,6 +24,8 @@
 //                                  (default: the active slot)
 //   dais-ctl set enter-mode <no-enter|enter-auto|enter-always>
 //   dais-ctl set strategy <whole-match|prefix|key-armed>
+//   dais-ctl set language <en|fi|...|auto>   transcription language
+//                                  (needs a multilingual model for non-en/auto)
 //                                  session-only; config wins on restart
 //   dais-ctl events [n]
 //   dais-ctl replay <trace_id>
@@ -203,6 +205,7 @@ function buildRequest(argv) {
       const [key, value] = rest;
       if (key === "enter-mode" && value) return { op: "settings", enter_mode: value };
       if (key === "strategy" && value) return { op: "settings", strategy: value };
+      if (key === "language" && value) return { op: "settings", language: value };
       usage();
       break;
     }

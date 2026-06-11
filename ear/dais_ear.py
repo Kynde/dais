@@ -9,6 +9,9 @@ stdin (one JSON object per line):
   {"type":"latch_stop"}               stop recording, transcribe, emit transcript
   {"type":"set_mode","mode":"vad"}    open the mic, Silero-endpoint utterances
   {"type":"set_mode","mode":"off"}    stop VAD / discard any recording, go idle
+  {"type":"set_language","language":"fi"} switch ASR language for subsequent
+                                      transcripts (null/"auto" = autodetect); no
+                                      model reload — the multilingual model stays
   {"type":"set_levels","on":true}     emit asr.level meter events (~8 Hz) while
                                       in VAD mode; off by default so the system
                                       carries zero overhead when no UI watches
@@ -285,6 +288,9 @@ class Ear:
     def __init__(self, args: argparse.Namespace):
         self.args = args
         self.tuning = {**DEFAULT_TUNING, **json.loads(args.tuning)}
+        # Runtime-switchable (set_language); None = autodetect. Needs a
+        # multilingual model — "*.en" checkpoints ignore this and only do en.
+        self.language = self._norm_lang(args.language)
         self.model = None
         self.vad: StreamingVad | None = None
         self.rec: subprocess.Popen | None = None
@@ -293,6 +299,11 @@ class Ear:
         self.vad_stream: VadStream | None = None
         self.levels_on = False
         self.asr_q: queue.Queue = queue.Queue()
+
+    @staticmethod
+    def _norm_lang(lang):
+        """"" / "auto" / null -> None (Whisper autodetects); else the code."""
+        return None if lang in (None, "", "auto") else lang
 
     def load_models(self) -> None:
         from faster_whisper import WhisperModel
@@ -388,7 +399,7 @@ class Ear:
         t = self.tuning
         try:
             raw_segments, info = self.model.transcribe(
-                str(path), beam_size=self.args.beam_size, language=self.args.language)
+                str(path), beam_size=self.args.beam_size, language=self.language)
             segments, texts, no_speech, logprob = [], [], [], []
             for seg in raw_segments:
                 text = str(seg.text).strip()
@@ -416,7 +427,8 @@ class Ear:
             else:
                 emit("voice.transcript",
                      {"text": full_text,
-                      "language": getattr(info, "language", None) or self.args.language,
+                      "language": (getattr(info, "language", None)
+                                   or self.language or self.args.language),
                       "origin": origin,
                       "duration_ms": duration_ms,
                       "asr_ms": asr_ms,
@@ -446,6 +458,9 @@ class Ear:
                 self.vad_start()
             else:
                 emit("asr.error", {"error": f"unknown mode: {mode!r}"}, self.args.model)
+        elif kind == "set_language":
+            self.language = self._norm_lang(msg.get("language"))
+            log(f"language -> {self.language or 'auto'}")
         elif kind == "set_levels":
             self.levels_on = bool(msg.get("on"))
         else:

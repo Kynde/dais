@@ -4,7 +4,7 @@
 //   DAIS_SOCKET=...  socket override (default $XDG_RUNTIME_DIR/dais/control.sock)
 //
 // Keys: v VAD · r latch · Esc escape · 1-5 target · Tab next-live · t pick
-//       a arm · m mute · d dry-run · e enter-mode · s strategy · ? help · q quit
+//       a arm · m mute · d dry-run · e enter-mode · s strategy · l lang · ? help · q quit
 //       (hidden, in ? overlay: > next target · < prev target)
 //
 // Entirely optional: the daemon runs identically without it. Subscribing
@@ -43,6 +43,8 @@ const S = {
   earAlive: false,
   strategy: "?",
   enterMode: "?",
+  language: "?",          // active transcription language (en | fi | auto)
+  languages: ["en", "auto"], // selectable set (from status; "auto" included)
   activeSlot: null,
   targets: {},            // slot -> {type, pane}
   levels: [],             // recent rms values (ring)
@@ -212,6 +214,8 @@ function seed() {
       S.mode = st.mode; S.armed = st.armed; S.execution = st.execution;
       S.muted = st.muted; S.earAlive = st.ear_alive; S.strategy = st.strategy;
       S.enterMode = st.enter_mode; S.activeSlot = st.active_slot;
+      if (st.language) S.language = st.language;
+      if (Array.isArray(st.languages) && st.languages.length) S.languages = st.languages;
       // status says we're currently open -> start the live clock now
       if (st.mode !== "off" && openSince == null) openSince = Date.now();
       if (st.mode === "off" && openSince != null) openSince = null;
@@ -378,9 +382,9 @@ function render() {
   lines.push(` ${C.dim}today${C.reset}  listened ${C.bold}${fmtDuration(liveListenMs())}${C.reset}` +
     ` · ${C.bold}${c.utterances}${C.reset} utterances · ${C.bold}${c.words}${C.reset} words` +
     ` · ${C.bold}${c.drops}${C.reset} drops · ${asr}` +
-    `   ${C.dim}${S.strategy}/${S.enterMode}${C.reset}`);
+    `   ${C.dim}${S.strategy}/${S.enterMode}/${S.language}${C.reset}`);
   const noteStr = Date.now() < S.noteUntil ? `  ${C.yellow}${S.note}${C.reset}` : "";
-  lines.push(` ${C.dim}[v]ad [r]ec [Esc] esc [1-5] target [Tab] next-live [t] pick [a]rm [m]ute [d]ry-run [e]nter-mode [s]trategy [?] help [q]uit${C.reset}${noteStr}`);
+  lines.push(` ${C.dim}[v]ad [r]ec [Esc] esc [1-5] target [Tab] next-live [t] pick [a]rm [m]ute [d]ry-run [e]nter-mode [s]trategy [l]ang [?] help [q]uit${C.reset}${noteStr}`);
 
   out.write(`${ESC}H${ESC}2J` + lines.slice(0, h).join("\n"));
 }
@@ -409,6 +413,7 @@ function helpBody(w) {
   L.push(key("d", "toggle dry-run (route & show, don't deliver)"));
   L.push(key("e", "cycle enter-mode"));
   L.push(key("s", "cycle router strategy"));
+  L.push(key("l", "cycle transcription language (needs multilingual model)"));
   L.push(key("q", "quit"));
   const hd = S.help;
   L.push("");
@@ -470,6 +475,9 @@ function onKey(key) {
   } else if (key === "s") {
     const next = cycle(STRATEGIES, S.strategy);
     request({ op: "settings", strategy: next }, ack(`router: ${next}`));
+  } else if (key === "l") {
+    const next = cycle(S.languages, S.language);
+    request({ op: "settings", language: next }, ack(`language: ${next}`));
   }
   else if (key === "\x1b") request({ op: "control", action: "esc" }, ack("escape sent"));
   else if (key === "\t") request({ op: "target", action: "next-live" }, ack("next live target"));

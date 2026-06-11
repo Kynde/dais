@@ -7,10 +7,16 @@
           ;; Extra whole-utterance commands (merged over built-in defaults).
           ;; Entries map a phrase to either {:keys [...]} (key sequence) or
           ;; {:text "..." :submit true/false} (typed reply).
+          ;; A command may carry :lang to bind it to a transcription language;
+          ;; untagged commands belong to :asr :language (the base, "en" here) and
+          ;; only match while that language is active. A phrase is only matchable
+          ;; when the model is transcribing in its language, so e.g. "ääni pois"
+          ;; below is reachable only under :language "fi".
           :commands
           {"send the brief"
            {:text "Voice input notice: parts of my input arrive via speech-to-text and may contain recognition errors or noise. Read /home/k/dais/BRIEF.md for how to cope (verify unclear intent, match dictated identifiers against the repo, ignore noise fragments, prefer numbered options)."
-            :submit false}}}
+            :submit false}
+           "ääni pois" {:control :voice-off :lang "fi"}}}
 
  ;; Dictation submit behavior: :no-enter | :enter-auto | :enter-always
  :enter-mode :no-enter
@@ -42,7 +48,13 @@
        :dir "ear"}
  ;; :source pins a PipeWire input node (`pactl list sources short`);
  ;; omit it to follow the system default source (headset plug/unplug works).
- :asr {:model "small.en" :device "cpu" :compute-type "int8" :language "en"}
+ ;;
+ ;; :language is the startup/base language; :languages is the selectable set
+ ;; (dais-ctl/dais-top cycle these plus "auto" = per-utterance detect). Switching
+ ;; needs a MULTILINGUAL model — "*.en" checkpoints only do English; for Finnish
+ ;; use e.g. "small" or (better Finnish, slower) "medium".
+ :asr {:model "small.en" :device "cpu" :compute-type "int8"
+       :language "en" :languages ["en" "fi"]}
 
  ;; VAD endpointing + false-trigger gates (JSON-serialized to the ear's
  ;; --tuning; underscore keys match the worker's DEFAULT_TUNING).
