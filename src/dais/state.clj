@@ -56,13 +56,16 @@
     {:state (assoc state :active-slot n)}
     {:error (str "no target slot " n)}))
 
-(defn next-slot [state]
+(defn- cycle-slot [state step]
   (let [slots (vec (sort (keys (:targets state))))]
     (if (empty? slots)
       {:error "no target slots configured"}
       (let [i (.indexOf ^java.util.List slots (:active-slot state))
-            n (nth slots (mod (inc i) (count slots)))]
+            n (nth slots (mod (+ i step) (count slots)))]
         {:state (assoc state :active-slot n)}))))
+
+(defn next-slot [state] (cycle-slot state 1))
+(defn prev-slot [state] (cycle-slot state -1))
 
 (defn set-target [state n target]
   {:state (assoc-in state [:targets n] target)})

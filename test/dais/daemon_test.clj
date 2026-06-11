@@ -93,6 +93,54 @@
     (inject "next target")
     (is (= 3 (get (req {"op" "query" "query" "status"}) "active_slot")))))
 
+(deftest target-next-plain-cycle
+  ;; "next" is a blind cycle (matches voice "next target") — ignores liveness.
+  (req {"op" "target" "action" "set" "slot" 3 "pane" "work:2.0"})
+  (req {"op" "target" "action" "use" "slot" 2})
+  (let [resp (req {"op" "target" "action" "next"})]
+    (is (true? (get resp "ok")))
+    (is (= 3 (get resp "slot")))
+    (is (= 3 (get (req {"op" "query" "query" "status"}) "active_slot"))))
+  (testing "wraps to slot 1 even though it is undeliverable"
+    (is (= 1 (get (req {"op" "target" "action" "next"}) "slot")))))
+
+(deftest target-prev-cycle
+  (req {"op" "target" "action" "set" "slot" 3 "pane" "work:2.0"}) ; slots 1 2 3, active 1
+  (let [resp (req {"op" "target" "action" "prev"})]
+    (is (true? (get resp "ok")))
+    (is (= 3 (get resp "slot")) "1 wraps back to 3")
+    (is (= 3 (get (req {"op" "query" "query" "status"}) "active_slot"))))
+  (is (= 2 (get (req {"op" "target" "action" "prev"}) "slot")) "3 -> 2"))
+
+(deftest query-commands-lists-voice-vocabulary
+  (let [resp (req {"op" "query" "query" "commands"})]
+    (is (true? (get resp "ok")))
+    (is (= "whole-match" (get resp "strategy")))
+    (testing "built-in whole-utterance commands are listed"
+      (let [says (set (map #(get % "say") (get resp "commands")))]
+        (is (contains? says "scratch that"))
+        (is (contains? says "yes"))))
+    (testing "daemon controls + keypress grammar are listed"
+      (is (seq (get resp "controls")))
+      (is (contains? (set (get-in resp ["keypress" "triggers"])) "press"))
+      (is (contains? (set (get-in resp ["keypress" "keys"])) "Enter")))))
+
+(deftest target-next-live-skips-dead
+  ;; config has slot 1 (tmux, dead) + slot 2 (focus); make only slot 2 live.
+  (with-redefs [daemon/target-alive? (fn [_ t] (= :focus (:type t)))]
+    (testing "from a dead active slot, jumps to the next live one"
+      (let [resp (req {"op" "target" "action" "next-live"})]
+        (is (true? (get resp "ok")))
+        (is (= 2 (get resp "slot")))
+        (is (= 2 (get (req {"op" "query" "query" "status"}) "active_slot")))))
+    (testing "a lone live target stays put rather than erroring"
+      (is (= 2 (get (req {"op" "target" "action" "next-live"}) "slot")))))
+  (testing "no deliverable targets -> error, slot unchanged"
+    (with-redefs [daemon/target-alive? (fn [_ _] false)]
+      (let [resp (req {"op" "target" "action" "next-live"})]
+        (is (false? (get resp "ok")))
+        (is (re-find #"deliverable" (get resp "error")))))))
+
 (deftest events-and-replay
   (let [resp (inject "press enter")
         trace (get resp "trace_id")

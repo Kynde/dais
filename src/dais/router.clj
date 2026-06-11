@@ -27,12 +27,18 @@
    "first" "1" "second" "2" "third" "3" "fourth" "4" "fifth" "5"
    "sixth" "6" "seventh" "7" "eighth" "8" "ninth" "9"})
 
-(def ^:private keypress-trigger-re
-  #"^\s*(?:press|hit|push|choose|select|pick|answer)\b")
+(def keypress-triggers
+  "Verbs that mark a whole utterance as a key-press command."
+  #{"press" "hit" "push" "choose" "select" "pick" "answer"})
 
-(def ^:private keypress-fillers
-  #{"press" "hit" "push" "choose" "select" "pick" "answer"
-    "the" "a" "an" "and" "then" "key" "keys" "option" "number" "button"})
+(def ^:private keypress-trigger-re
+  (re-pattern (str "^\\s*(?:" (str/join "|" keypress-triggers) ")\\b")))
+
+(def ^:private connective-fillers
+  "Glue words dropped before mapping the remaining tokens to keys."
+  #{"the" "a" "an" "and" "then" "key" "keys" "option" "number" "button"})
+
+(def ^:private keypress-fillers (into keypress-triggers connective-fillers))
 
 (def default-commands
   "Built-in whole-utterance commands; config :router :commands merges over
@@ -144,6 +150,22 @@
   [config-commands]
   (into {} (map (fn [[k v]] [(normalize k) v])
                 (merge default-commands config-commands))))
+
+(def control-phrases
+  "Always-available daemon voice commands, for help UIs. Description only —
+  the matching logic lives in control-request; keep the two in sync."
+  [["voice off / dais off" "stop listening"]
+   ["next target"          "cycle to the next target slot"]
+   ["target one … five"    "switch to that slot (digits & ordinals too)"]])
+
+(defn vocabulary
+  "Static voice-command reference for help UIs. Callers layer on the live
+  merged :commands map (it is config-dependent) and the active strategy."
+  []
+  {:controls control-phrases
+   :triggers (vec (sort keypress-triggers))
+   :ignored  (vec (sort connective-fillers))
+   :keys     (vec (sort (distinct (vals key-words))))})
 
 (defn- strip-prefix [norm prefix]
   (when (str/starts-with? norm (str prefix " "))

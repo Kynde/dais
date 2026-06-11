@@ -14,6 +14,8 @@
 //   dais-ctl arm                   next utterance must be a command
 //   dais-ctl target set <slot> <session:window.pane|focus|current>
 //   dais-ctl target use <slot>
+//   dais-ctl target next | prev    cycle to the next/previous slot
+//   dais-ctl target next-live      next deliverable slot (skips dead targets)
 //   dais-ctl target list
 //   dais-ctl target panes          list all tmux panes (annotated)
 //   dais-ctl target pick [slot]    fzf-pick a pane into a slot
@@ -181,6 +183,9 @@ function buildRequest(argv) {
         return { op: "target", action: "set", slot: Number(slot), pane: value };
       if (action === "use" && slot)
         return { op: "target", action: "use", slot: Number(slot) };
+      if (action === "next" || action === "prev")
+        return { op: "target", action };
+      if (action === "next-live") return { op: "target", action: "next-live" };
       if (action === "list") return { op: "target", action: "list" };
       if (action === "panes") return { op: "target", action: "panes" };
       usage();

@@ -51,6 +51,10 @@
             s1 (:state (state/next-slot s2))]
         (is (= 2 (:active-slot s2)))
         (is (= 1 (:active-slot s1)))))
+    (testing "prev-slot cycles backward"
+      (let [st3 (assoc-in st [:targets 3] {:type :focus})] ; slots 1 2 3, active 1
+        (is (= 3 (:active-slot (:state (state/prev-slot st3))))            "1 wraps to 3")
+        (is (= 2 (:active-slot (:state (state/prev-slot (assoc st3 :active-slot 3))))) "3 -> 2")))
     (testing "set-target adds a slot"
       (is (= {:type :tmux :pane "x:0.0"}
              (get-in (:state (state/set-target st 3 {:type :tmux :pane "x:0.0"}))

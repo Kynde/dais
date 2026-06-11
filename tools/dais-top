@@ -3,8 +3,9 @@
 //
 //   DAIS_SOCKET=...  socket override (default $XDG_RUNTIME_DIR/dais/control.sock)
 //
-// Keys: v VAD toggle · r record latch · Esc send Escape · 1-5 switch target
-//       a arm · q quit
+// Keys: v VAD · r latch · Esc escape · 1-5 target · Tab next-live · t pick
+//       a arm · e enter-mode · s strategy · ? help · q quit
+//       (hidden, in ? overlay: > next target · < prev target)
 //
 // Entirely optional: the daemon runs identically without it. Subscribing
 // turns on the ear's ~8 Hz level meter events; they stop when we disconnect.
@@ -51,6 +52,7 @@ const S = {
   transcribing: false,
   heard: [],              // {time, text, outcome, drop, trace}
   picker: null,           // {panes, idx, awaitSlot} while the t-overlay is open
+  help: null,             // command reference from the daemon while ? is open
   flashUntil: 0,
   counters: { listenMs: 0, utterances: 0, words: 0, drops: 0, asrMsSum: 0, asrN: 0 },
   note: "",               // transient footer note
@@ -315,8 +317,12 @@ function render() {
   lines.push(` targets  ${tgts.join("  ") || C.dim + "none configured" + C.reset}`);
   lines.push(sep);
 
-  // heard list — or the pane picker overlay while open
-  if (S.picker) {
+  // heard list — or an overlay (help / pane picker) while open
+  if (S.help) {
+    lines.push(` ${C.bold}help${C.reset}   ${C.dim}? or Esc to close${C.reset}`);
+    const avail = Math.max(3, h - lines.length - 4);
+    for (const ln of helpBody(w).slice(0, avail)) lines.push(ln);
+  } else if (S.picker) {
     const pk = S.picker;
     const head = pk.awaitSlot
       ? `${C.yellow}assign ${C.bold}${pk.panes[pk.idx]?.pane}${C.reset}${C.yellow} to which slot? [1-5]${C.reset}`
@@ -357,7 +363,7 @@ function render() {
     ` · ${C.bold}${c.drops}${C.reset} drops · ${asr}` +
     `   ${C.dim}${S.strategy}/${S.enterMode}${C.reset}`);
   const noteStr = Date.now() < S.noteUntil ? `  ${C.yellow}${S.note}${C.reset}` : "";
-  lines.push(` ${C.dim}[v]ad [r]ec [Esc] esc [1-5] target [t] pick [a]rm [e]nter-mode [s]trategy [q]uit${C.reset}${noteStr}`);
+  lines.push(` ${C.dim}[v]ad [r]ec [Esc] esc [1-5] target [Tab] next-live [t] pick [a]rm [e]nter-mode [s]trategy [?] help [q]uit${C.reset}${noteStr}`);
 
   out.write(`${ESC}H${ESC}2J` + lines.slice(0, h).join("\n"));
 }
@@ -365,6 +371,46 @@ function render() {
 function describeTarget(t) {
   if (!t) return "?";
   return t.type === "focus" ? "focus" : t.pane ?? "?";
+}
+
+// Full key + voice-command reference shown behind ?. Keyboard rows are static;
+// the voice section is the daemon's live vocabulary (config commands included).
+function helpBody(w) {
+  const L = [];
+  const key = (k, desc) => `  ${C.bold}${k.padEnd(4)}${C.reset} ${C.dim}${desc}${C.reset}`;
+  L.push(` ${C.cyan}keyboard${C.reset}`);
+  L.push(key("v", "toggle VAD listening"));
+  L.push(key("r", "toggle manual record latch"));
+  L.push(key("Esc", "send Escape to the target"));
+  L.push(key("1-5", "switch to target slot"));
+  L.push(key("Tab", "next live target (skips dead ones)"));
+  L.push(key(">", "next target — cycle (incl. dead)"));
+  L.push(key("<", "previous target — cycle"));
+  L.push(key("t", "pick a target pane"));
+  L.push(key("a", "arm: next utterance must be a command"));
+  L.push(key("e", "cycle enter-mode"));
+  L.push(key("s", "cycle router strategy"));
+  L.push(key("q", "quit"));
+  const hd = S.help;
+  L.push("");
+  if (hd.loading) { L.push(` ${C.cyan}voice${C.reset}  ${C.dim}loading…${C.reset}`); return L; }
+  if (!hd.ok) {
+    L.push(` ${C.cyan}voice${C.reset}  ${C.red}unavailable: ${hd.error ?? "?"}${C.reset}`);
+    return L;
+  }
+  const ctx = `strategy ${hd.strategy} · enter ${hd.enter_mode}` +
+    (hd.strategy === "prefix" ? ` · prefix “${hd.prefix}”` : "");
+  L.push(` ${C.cyan}voice${C.reset}  ${C.dim}${ctx}${C.reset}`);
+  const row = (say, does) =>
+    `  ${C.green}${truncate(say, 22).padEnd(22)}${C.reset}${C.dim}${truncate(does, Math.max(20, w - 26))}${C.reset}`;
+  for (const c of [...(hd.controls ?? []), ...(hd.commands ?? [])]) L.push(row(c.say, c.does));
+  const kp = hd.keypress;
+  if (kp) {
+    L.push(` ${C.dim}key presses: ${kp.triggers.join("/")} + keys${C.reset}`);
+    L.push(`  ${C.dim}keys: ${kp.keys.join(" ")}${C.reset}`);
+    L.push(`  ${C.dim}ignored: ${kp.ignored.join(" ")}${C.reset}`);
+  }
+  return L;
 }
 
 function tilde(p) {
@@ -382,7 +428,9 @@ function cycle(list, current) {
 function onKey(key) {
   if (key === "\x03") return shutdown();
   if (S.picker) return onPickerKey(key);
+  if (S.help) { if (key === "?" || key === "\x1b" || key === "q") S.help = null; return; }
   if (key === "q") return shutdown();
+  if (key === "?") return openHelp();
   if (key === "v") request({ op: "control", action: "toggle-vad" }, ack("vad"));
   else if (key === "r") request({ op: "control", action: "toggle-record" }, ack("rec"));
   else if (key === "a") request({ op: "control", action: "arm" }, ack("armed"));
@@ -395,9 +443,20 @@ function onKey(key) {
     request({ op: "settings", strategy: next }, ack(`router: ${next}`));
   }
   else if (key === "\x1b") request({ op: "control", action: "esc" }, ack("escape sent"));
+  else if (key === "\t") request({ op: "target", action: "next-live" }, ack("next live target"));
+  // Hidden cycle keys (documented only in the ? overlay): blind next/prev.
+  else if (key === ">") request({ op: "target", action: "next" }, ack("next target"));
+  else if (key === "<") request({ op: "target", action: "prev" }, ack("prev target"));
   else if (/^[1-5]$/.test(key)) {
     request({ op: "target", action: "use", slot: Number(key) }, ack(`target ${key}`));
   }
+}
+
+function openHelp() {
+  S.help = { loading: true };
+  request({ op: "query", query: "commands" }, (resp) => {
+    if (S.help) S.help = resp ?? { ok: false, error: "no response" };
+  });
 }
 
 function openPicker() {

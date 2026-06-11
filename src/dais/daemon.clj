@@ -6,8 +6,9 @@
     {\"op\":\"control\",\"action\":\"toggle-vad\"}        also: toggle-record, voice-off,
                                                       arm, esc, shutdown
     {\"op\":\"target\",\"action\":\"set\",\"slot\":1,
-     \"pane\":\"app:1.2\"|\"focus\"|\"current\"}          also: use, list
-    {\"op\":\"query\",\"query\":\"status\"}
+     \"pane\":\"app:1.2\"|\"focus\"|\"current\"}          also: use, list, panes,
+                                                      next/prev (cycle), next-live
+    {\"op\":\"query\",\"query\":\"status\"}               also: commands
     {\"op\":\"events\",\"last\":20}
     {\"op\":\"replay\",\"trace_id\":\"...\"}
 
@@ -274,6 +275,20 @@
     :focus (.exists (io/file (config/ydotool-socket config)))
     false))
 
+(defn- next-alive-slot
+  "The next slot (cyclically after the active one) whose target is deliverable.
+  Skips undeliverable targets; falls back to the active slot when it is the only
+  live one, so a lone target stays put rather than erroring. nil if none live."
+  [config st]
+  (let [slots (vec (sort (keys (:targets st))))]
+    (when (seq slots)
+      (let [i (.indexOf ^java.util.List slots (:active-slot st))
+            n (count slots)]
+        (some (fn [k]
+                (let [s (nth slots (mod (+ i 1 k) n))]
+                  (when (target-alive? config (get-in st [:targets s])) s)))
+              (range n))))))
+
 (defn- parse-target-value
   "\"focus\" -> focus target; \"current\" -> the active tmux pane;
   \"session:window.pane\" -> tmux target. Returns {:target t} or {:error e}."
@@ -310,6 +325,24 @@
         (when-let [ev (get res "event")]
           (record! ctx ev))
         (dissoc res "event")))
+
+    ("next" "prev")
+    ;; Blind cycle, matching the voice "next target" command — ignores liveness.
+    (let [f (if (= action "prev") state/prev-slot state/next-slot)
+          res (transition! ctx f (str "target-" action) nil)]
+      (when-let [ev (get res "event")]
+        (record! ctx ev))
+      (cond-> (dissoc res "event")
+        (get res "ok") (assoc "slot" (:active-slot @state))))
+
+    "next-live"
+    ;; Skips undeliverable slots; lands on the next live target.
+    (if-let [slot (next-alive-slot config @state)]
+      (let [res (transition! ctx #(state/set-slot % slot) (str "target-next-live:" slot) nil)]
+        (when-let [ev (get res "event")]
+          (record! ctx ev))
+        (-> res (dissoc "event") (assoc "slot" slot)))
+      {"ok" false "error" "no deliverable target slots"})
 
     "list"
     ;; Includes per-target liveness — dais-top polls this (~1/s while open),
@@ -406,6 +439,28 @@
                             "enter_mode" (name (:enter-mode st :no-enter))
                             "sequence" (.get sequence-counter)
                             "events_dir" events-dir})
+                "commands"
+                ;; The voice vocabulary: static grammar from the router plus the
+                ;; live merged command map (config-dependent). Powers the dais-top
+                ;; help overlay so it never drifts from config/dais.edn.
+                (let [st @state
+                      vocab (router/vocabulary)
+                      describe (fn [entry]
+                                 (if (:keys entry)
+                                   (str "→ " (str/join " " (:keys entry)))
+                                   (str "type " (pr-str (:text entry))
+                                        (when (:submit entry) " + Enter"))))]
+                  {"ok" true
+                   "strategy" (name (:strategy st :whole-match))
+                   "enter_mode" (name (:enter-mode st :no-enter))
+                   "prefix" (get-in (:config ctx) [:router :prefix] "do")
+                   "controls" (mapv (fn [[say does]] {"say" say "does" does})
+                                    (:controls vocab))
+                   "commands" (mapv (fn [[say entry]] {"say" say "does" (describe entry)})
+                                    (sort-by key (:commands ctx)))
+                   "keypress" {"triggers" (:triggers vocab)
+                               "keys" (:keys vocab)
+                               "ignored" (:ignored vocab)}})
                 {"ok" false "error" (str "Unknown query: " (pr-str (get req "query")))})
       "events" {"ok" true "events" (log/last-n events-dir (or (get req "last") 20))}
       "replay" {"ok" true "events" (log/by-trace events-dir (get req "trace_id"))}

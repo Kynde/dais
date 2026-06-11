@@ -55,6 +55,9 @@ tools/dais-ctl target set 2 app:claude.0 # a tmux pane (window NAMES work too)
 tools/dais-ctl target set 1 focus        # the focused app (ydotool)
 tools/dais-ctl target set 3 current      # grab the active tmux pane
 tools/dais-ctl target use 2              # switch; or say "target two"
+tools/dais-ctl target next               # cycle to the next slot (= "next target")
+tools/dais-ctl target prev               # cycle to the previous slot
+tools/dais-ctl target next-live          # next deliverable slot (skips dead targets)
 tools/dais-ctl target panes              # all panes, agents ★, slots annotated
 tools/dais-ctl target pick [slot]        # fzf-pick a pane (default: active slot)
 ```
@@ -95,8 +98,12 @@ slots with the active one highlighted, the last utterances with their outcome
 utterances, words, drops, mean ASR latency) seeded from the event log.
 
 Control keys: `v` VAD toggle · `r` record latch · `Esc` send Escape ·
-`1`–`5` switch target · `t` pane picker · `a` arm · `e` cycle enter-mode ·
-`s` cycle router strategy · `q` quit. The `e`/`s` toggles (also
+`1`–`5` switch target · `Tab` next live target (skips dead ones) ·
+`t` pane picker · `a` arm · `e` cycle enter-mode ·
+`s` cycle router strategy · `?` help · `q` quit. Press `?` for a full
+key + voice-command reference — it also lists the unobtrusive cycle keys
+(`>` next / `<` prev target) and your config commands, pulled live from the
+daemon so the list never drifts from `config/dais.edn`. The `e`/`s` toggles (also
 `dais-ctl set enter-mode ...` / `set strategy ...`) are **session-only** —
 a daemon restart returns to the config defaults; calibration knobs (VAD
 tuning, idle timeout) stay config-file only on purpose.
