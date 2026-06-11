@@ -53,6 +53,8 @@ const S = {
   heard: [],              // {time, text, outcome, drop, trace}
   picker: null,           // {panes, idx, awaitSlot} while the t-overlay is open
   help: null,             // command reference from the daemon while ? is open
+  helpScroll: 0,          // top row offset into the help body when it overflows
+  helpRows: 10,           // visible help rows (set by render; used for paging)
   flashUntil: 0,
   counters: { listenMs: 0, utterances: 0, words: 0, drops: 0, asrMsSum: 0, asrN: 0 },
   note: "",               // transient footer note
@@ -319,9 +321,19 @@ function render() {
 
   // heard list — or an overlay (help / pane picker) while open
   if (S.help) {
-    lines.push(` ${C.bold}help${C.reset}   ${C.dim}? or Esc to close${C.reset}`);
+    const headerIdx = lines.length;
+    lines.push("");                          // header filled in once we know scroll state
+    const body = helpBody(w);
     const avail = Math.max(3, h - lines.length - 4);
-    for (const ln of helpBody(w).slice(0, avail)) lines.push(ln);
+    S.helpRows = avail;
+    const maxScroll = Math.max(0, body.length - avail);
+    S.helpScroll = Math.min(S.helpScroll, maxScroll);
+    const shown = body.slice(S.helpScroll, S.helpScroll + avail);
+    const pos = maxScroll > 0
+      ? `  ${C.dim}${S.helpScroll + 1}–${S.helpScroll + shown.length}/${body.length} · ↑↓ PgUp/PgDn${C.reset}`
+      : "";
+    lines[headerIdx] = ` ${C.bold}help${C.reset}   ${C.dim}? or Esc to close${C.reset}${pos}`;
+    for (const ln of shown) lines.push(ln);
   } else if (S.picker) {
     const pk = S.picker;
     const head = pk.awaitSlot
@@ -428,7 +440,7 @@ function cycle(list, current) {
 function onKey(key) {
   if (key === "\x03") return shutdown();
   if (S.picker) return onPickerKey(key);
-  if (S.help) { if (key === "?" || key === "\x1b" || key === "q") S.help = null; return; }
+  if (S.help) return onHelpKey(key);
   if (key === "q") return shutdown();
   if (key === "?") return openHelp();
   if (key === "v") request({ op: "control", action: "toggle-vad" }, ack("vad"));
@@ -454,9 +466,20 @@ function onKey(key) {
 
 function openHelp() {
   S.help = { loading: true };
+  S.helpScroll = 0;
   request({ op: "query", query: "commands" }, (resp) => {
     if (S.help) S.help = resp ?? { ok: false, error: "no response" };
   });
+}
+
+function onHelpKey(key) {
+  if (key === "?" || key === "\x1b" || key === "q") { S.help = null; return; }
+  const page = Math.max(1, S.helpRows - 1);   // one line of overlap, like a pager
+  if (key === "\x1b[A" || key === "k") S.helpScroll -= 1;
+  else if (key === "\x1b[B" || key === "j") S.helpScroll += 1;
+  else if (key === "\x1b[5~") S.helpScroll -= page;     // PgUp
+  else if (key === "\x1b[6~") S.helpScroll += page;     // PgDn
+  if (S.helpScroll < 0) S.helpScroll = 0;               // upper bound clamped in render
 }
 
 function openPicker() {
