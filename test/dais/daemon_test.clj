@@ -424,6 +424,38 @@
                                                     :payload {"text" "mumble" "avg_logprob" -2.0}})})
                    ["plan" "action"])))))
 
+(deftest sleep-edge-parsing
+  ;; dbus-monitor prints the signal header, then its boolean argument:
+  ;;   signal time=… path=/org/freedesktop/login1; …; member=PrepareForSleep
+  ;;      boolean true
+  (is (= [true nil]
+         (daemon/sleep-edge false "signal time=1749.2 sender=:1.4 -> destination=(null destination) serial=190 path=/org/freedesktop/login1; interface=org.freedesktop.login1.Manager; member=PrepareForSleep")))
+  (is (= [false true] (daemon/sleep-edge true "   boolean true")))
+  (is (= [false false] (daemon/sleep-edge true "   boolean false")))
+  (testing "a stray boolean without a pending signal header is ignored"
+    (is (= [false nil] (daemon/sleep-edge false "   boolean true"))))
+  (testing "monitor banner noise (NameAcquired etc.) passes through"
+    (is (= [false nil] (daemon/sleep-edge false "signal … member=NameAcquired")))
+    (is (= [false nil] (daemon/sleep-edge false "string \":1.299\"")))))
+
+(deftest suspend-closes-the-mic
+  (req {"op" "control" "action" "toggle-vad"})
+  (daemon/suspend-edge! *ctx* true)
+  (is (= "off" (get (req {"op" "query" "query" "status"}) "mode")))
+  (is (some #(and (= "control.state_changed" (get % "type"))
+                  (= "suspend" (get-in % ["payload" "via"])))
+            (get (req {"op" "events" "last" 10}) "events")))
+  (testing "already off (clean pre-sleep stop): resume edge is a silent no-op"
+    (let [n (count (get (req {"op" "events" "last" 50}) "events"))]
+      (daemon/suspend-edge! *ctx* false)
+      (is (= n (count (get (req {"op" "events" "last" 50}) "events"))))))
+  (testing "resume edge closes a mic that survived the race (latch too)"
+    (req {"op" "control" "action" "toggle-record"})
+    (daemon/suspend-edge! *ctx* false)
+    (is (= "off" (get (req {"op" "query" "query" "status"}) "mode")))
+    (is (some #(= "resume" (get-in % ["payload" "via"]))
+              (get (req {"op" "events" "last" 10}) "events")))))
+
 (deftest invalid-and-unknown
   (is (false? (get (req {"op" "publish" "event" {"type" "voice.transcript"}}) "ok")))
   (is (false? (get (req {"op" "nope"}) "ok")))

@@ -28,7 +28,8 @@
             [dais.notify :as notify]
             [dais.router :as router]
             [dais.state :as state])
-  (:import (java.net StandardProtocolFamily UnixDomainSocketAddress)
+  (:import (java.lang ProcessBuilder$Redirect)
+           (java.net StandardProtocolFamily UnixDomainSocketAddress)
            (java.nio.channels Channels ServerSocketChannel SocketChannel)
            (java.nio.file Files Path)
            (java.io BufferedReader InputStreamReader OutputStreamWriter)
@@ -688,6 +689,68 @@
                             (str "idle for " timeout-min " min")
                             {:icon "microphone-sensitivity-muted"})))))))
 
+(defn sleep-edge
+  "Fold one line of dbus-monitor output into [armed' edge]. armed means a
+  PrepareForSleep signal header was seen and its boolean argument is pending;
+  edge surfaces that boolean — true (about to suspend) / false (resumed) —
+  or nil. Pure; public for tests."
+  [armed line]
+  (cond
+    (str/includes? line "member=PrepareForSleep") [true nil]
+    (and armed (str/includes? line "boolean true")) [false true]
+    (and armed (str/includes? line "boolean false")) [false false]
+    :else [armed nil]))
+
+(defn suspend-edge!
+  "Force voice-off around suspend. Runs on BOTH edges: at lid close, and
+  again at resume as belt and braces — the pre-sleep write races the freeze
+  (no logind delay inhibitor is held), so resume re-checks. Only acts (and
+  notifies) when the mic was open: waking the laptop must never resume
+  listening, and an already-closed mic stays silent. A latch recording in
+  flight is discarded, not transcribed (same \"off means OFF\" rule as a
+  deliberate stop). Public for tests."
+  [{:keys [state config] :as ctx} suspending?]
+  (locking handler-lock
+    (when (state/mic-open? @state)
+      (let [via (if suspending? "suspend" "resume")
+            res (transition! ctx state/voice-off via nil)]
+        (when-let [ev (get res "event")]
+          (record! ctx ev))
+        (notify/notify! config "Voice off"
+                        (if suspending? "suspending" "was still open after resume")
+                        {:icon "microphone-sensitivity-muted"})))))
+
+(defn- start-sleep-watch!
+  "Spawn dbus-monitor (system bus) on logind's PrepareForSleep signal and
+  close the mic on each edge — an open mic must not survive a lid close.
+  Returns the process, or nil (with a stderr note) when dbus-monitor is
+  unavailable; the daemon runs fine without it."
+  [ctx]
+  (try
+    (let [argv ["dbus-monitor" "--system"
+                (str "type='signal',sender='org.freedesktop.login1',"
+                     "interface='org.freedesktop.login1.Manager',"
+                     "member='PrepareForSleep',path='/org/freedesktop/login1'")]
+          pb (doto (ProcessBuilder. ^java.util.List argv)
+               (.redirectError ProcessBuilder$Redirect/DISCARD))
+          proc (.start pb)
+          reader (Thread.
+                  (fn []
+                    (with-open [r (io/reader (.getInputStream proc))]
+                      (loop [armed false]
+                        (when-let [line (.readLine r)]
+                          (let [[armed' edge] (sleep-edge armed line)]
+                            (when (some? edge)
+                              (try (suspend-edge! ctx edge) (catch Exception _)))
+                            (recur armed'))))))
+                  "dais-sleep-watch")]
+      (doto reader (.setDaemon true) (.start))
+      proc)
+    (catch Exception e
+      (binding [*out* *err*]
+        (println "dais: suspend watch disabled (dbus-monitor):" (.getMessage e)))
+      nil)))
+
 (defn start-ear!
   "Spawn the ear worker per config (:ear {:enabled? :cmd :dir}) and wire its
   events into ctx. No-op when disabled. Public for a REPL restart."
@@ -766,6 +829,11 @@
     (delete-if-exists socket-path)
     (write-state! ctx)
     (start-ear! ctx)
+    (let [sleep-watch (start-sleep-watch! ctx)]
+      (when sleep-watch
+        (.addShutdownHook (Runtime/getRuntime)
+                          (Thread. #(try (.destroy ^Process sleep-watch)
+                                         (catch Exception _))))))
     (doto (Thread. (fn [] (loop []
                             (Thread/sleep 15000)
                             (try (check-idle! ctx) (catch Exception _))

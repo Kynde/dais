@@ -9,6 +9,7 @@ confidence gate ("uncertain — say again?") :: config/dais.edn :confidence-min-
 switch transcription language :: dais-ctl set language <code|auto> / dais-top l # session-only; needs a multilingual :asr :model (not *.en); commands tagged :lang match only their language
 endpointing behavior :: ear/dais_ear.py VadStream.run # pre-roll, hysteresis, startup mute, max length
 mode transitions / refusals :: src/dais/state.clj # pure; ear control-message mapping in src/dais/ear.clj ear-message
+mic across suspend/lid-close :: src/dais/daemon.clj start-sleep-watch!/suspend-edge! # dbus-monitor on logind PrepareForSleep; voice-off on BOTH edges (pre-sleep write races the freeze), notifies only if the mic was open; not configurable on purpose
 socket protocol / new op :: src/dais/daemon.clj handle-request # one lock serializes all requests
 delivery mechanics :: src/dais/executor.clj # plans as data; dry-run returns would_run
 notification look :: src/dais/daemon.clj mode-notification + src/dais/notify.clj

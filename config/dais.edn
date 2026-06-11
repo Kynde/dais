@@ -38,7 +38,9 @@
  :notifications {:enabled true :timeout-ms 2500}
 
  ;; Mic hygiene: force voice-off after a VAD session hears nothing for this
- ;; many minutes (decimals ok, nil/0 disables).
+ ;; many minutes (decimals ok, nil/0 disables). Suspend/lid-close ALWAYS
+ ;; forces voice-off (both at sleep and re-checked at resume) — waking the
+ ;; laptop never resumes listening; deliberately not configurable.
  :vad-idle-off-min 5
 
  ;; Confidence gate: an utterance whose mean avg_logprob is below this floor is
