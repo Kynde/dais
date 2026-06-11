@@ -125,6 +125,22 @@
       (is (contains? (set (get-in resp ["keypress" "triggers"])) "press"))
       (is (contains? (set (get-in resp ["keypress" "keys"])) "Enter")))))
 
+(deftest query-commands-description-and-config-flag
+  (let [cfg (assoc-in config [:router :commands]
+                      {"deploy" {:keys ["C-M-t"] :description "open a terminal"}})
+        ctx (daemon/make-ctx {:config cfg
+                              :events-dir (tmp-dir "dais-ev")
+                              :runtime-dir (tmp-dir "dais-rt")
+                              :dry-run true})
+        resp (daemon/handle-request ctx {"op" "query" "query" "commands"})
+        by-say (into {} (map (fn [c] [(get c "say") c]) (get resp "commands")))]
+    (testing "config command: :description preferred, config flag true"
+      (is (= "open a terminal" (get-in by-say ["deploy" "does"])))
+      (is (true? (get-in by-say ["deploy" "config"]))))
+    (testing "built-in command: synthesized does, config flag false"
+      (is (= "→ C-u" (get-in by-say ["scratch that" "does"])))
+      (is (false? (get-in by-say ["scratch that" "config"]))))))
+
 (deftest target-next-live-skips-dead
   ;; config has slot 1 (tmux, dead) + slot 2 (focus); make only slot 2 live.
   (with-redefs [daemon/target-alive? (fn [_ t] (= :focus (:type t)))]

@@ -150,8 +150,31 @@ Keys: *enter, return, escape, esc, up, down, left, right, tab, backspace*,
 Every non-filler word must map to a key, or the utterance is dictation —
 "select the right abstraction for this" types as text. Everything that isn't
 a command is dictation: typed as one line, never submitted (`:no-enter`; with
-`:enter-auto` a trailing spoken "enter" submits). Add your own commands in
-`config/dais.edn` under `:router :commands`.
+`:enter-auto` a trailing spoken "enter" submits).
+
+### Configuring commands
+
+Add your own under `config/dais.edn` `:router :commands` — a phrase maps to:
+
+```clojure
+:commands
+{"clear"        {:keys ["C-u"]}                      ; press a key / chord
+ "say hi"       {:text "hello" :submit true}         ; type text, then Enter
+ "new terminal" {:keys ["C-M-t"]                     ; ctrl-alt-t (focus target)
+                 :description "open a terminal"}}     ; shown in dais-top ?
+```
+
+Keypress **chords** are tmux-style: modifier prefixes `C-` ctrl, `M-` alt,
+`S-` shift, `s-` super, then a base key — letters, digits, `Enter` `Escape`
+`Tab` `Space` `BSpace`, arrows, `Home` `End` `PgUp` `PgDn`, `F1`–`F12`. The
+same chord renders to a tmux `send-keys` token and to ydotool keycodes, so a
+command works on either target (super and WM globals like `C-M-t` only do
+anything on a `:focus` target). Config commands are trusted, so they may use
+the full chord vocabulary; the narrow *voice* keypress grammar above is
+unchanged — speech can never synthesize a `M-`/`C-M-` chord.
+
+`:description` is a one-liner listed under **configured** in the dais-top `?`
+help overlay (without it, the overlay shows the synthesized effect).
 
 ## Statusline integration
 

@@ -445,18 +445,28 @@
                 ;; help overlay so it never drifts from config/dais.edn.
                 (let [st @state
                       vocab (router/vocabulary)
+                      ;; A command's :description wins; else synthesize from shape.
                       describe (fn [entry]
-                                 (if (:keys entry)
-                                   (str "→ " (str/join " " (:keys entry)))
-                                   (str "type " (pr-str (:text entry))
-                                        (when (:submit entry) " + Enter"))))]
+                                 (cond
+                                   (:description entry) (:description entry)
+                                   (:macro entry) (str "macro · " (count (:macro entry)) " steps")
+                                   (:keys entry) (str "→ " (str/join " " (:keys entry)))
+                                   :else (str "type " (pr-str (:text entry))
+                                              (when (:submit entry) " + Enter"))))
+                      ;; Phrases defined in config (normalized to match the merged
+                      ;; map's keys) — the rest are router/default-commands built-ins.
+                      config-phrases (set (map router/normalize
+                                               (keys (get-in (:config ctx) [:router :commands]))))]
                   {"ok" true
                    "strategy" (name (:strategy st :whole-match))
                    "enter_mode" (name (:enter-mode st :no-enter))
                    "prefix" (get-in (:config ctx) [:router :prefix] "do")
                    "controls" (mapv (fn [[say does]] {"say" say "does" does})
                                     (:controls vocab))
-                   "commands" (mapv (fn [[say entry]] {"say" say "does" (describe entry)})
+                   "commands" (mapv (fn [[say entry]]
+                                      {"say" say
+                                       "does" (describe entry)
+                                       "config" (contains? config-phrases say)})
                                     (sort-by key (:commands ctx)))
                    "keypress" {"triggers" (:triggers vocab)
                                "keys" (:keys vocab)

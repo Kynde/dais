@@ -45,11 +45,39 @@
     (is (= ["send-keys" "-t" "app:1.2" "Down" "Enter"]
            (drop 3 (get (first steps) "argv"))))))
 
-(deftest key-whitelist-enforced
-  (let [res (dry {:action :press-keys :keys ["Enter" "x"]} tmux-target)]
-    (is (= "error" (get res "result"))))
-  (let [res (dry {:action :press-keys :keys []} focus-target)]
-    (is (= "error" (get res "result")))))
+(deftest key-vocabulary-enforced
+  (testing "an unknown base key is rejected"
+    (is (= "error" (get (dry {:action :press-keys :keys ["Enter" "Nope"]} tmux-target) "result"))))
+  (testing "an unknown modifier prefix is rejected"
+    (is (= "error" (get (dry {:action :press-keys :keys ["X-a"]} tmux-target) "result"))))
+  (testing "empty key list is rejected"
+    (is (= "error" (get (dry {:action :press-keys :keys []} focus-target) "result")))))
+
+(deftest chord-parsing
+  (testing "modifiers + base parse; order-insensitive set of mods"
+    (is (= {:mods #{"C" "M"} :base "t"} (executor/parse-chord "C-M-t")))
+    (is (= {:mods #{} :base "Enter"} (executor/parse-chord "Enter")))
+    (is (= {:mods #{"C"} :base "a"} (executor/parse-chord "C-a"))))
+  (testing "bare letters/digits are now valid keys"
+    (is (executor/valid-chord? "x"))
+    (is (executor/valid-chord? "1")))
+  (testing "unknown base / modifier are invalid"
+    (is (not (executor/valid-chord? "Nope")))
+    (is (not (executor/valid-chord? "X-a")))
+    (is (not (executor/valid-chord? "C-")))))
+
+(deftest chord-renders-both-backends
+  (testing "tmux token is the canonical chord string"
+    (let [steps (would-run (dry {:action :press-keys :keys ["C-M-t" "M-Right"]} tmux-target))]
+      (is (= ["send-keys" "-t" "app:1.2" "C-M-t" "M-Right"]
+             (drop 3 (get (first steps) "argv"))))))
+  (testing "PgUp maps to the tmux PageUp name"
+    (let [steps (would-run (dry {:action :press-keys :keys ["PgUp"]} tmux-target))]
+      (is (= "PageUp" (last (get (first steps) "argv"))))))
+  (testing "ydotool presses modifiers in order, releases in reverse (ctrl-alt-t)"
+    (let [steps (would-run (dry {:action :press-keys :keys ["C-M-t"]} focus-target))]
+      (is (= ["/usr/bin/ydotool" "key" "29:1" "56:1" "20:1" "20:0" "56:0" "29:0"]
+             (get (first steps) "argv"))))))
 
 (deftest focus-type-text-plan
   (let [steps (would-run (dry {:action :type-text :text "hello" :submit true} focus-target))]

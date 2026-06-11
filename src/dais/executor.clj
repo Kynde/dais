@@ -7,7 +7,8 @@
   - Subprocesses run from argv vectors, never shell strings. Dictation text
     travels on stdin (tmux load-buffer - / ydotool type --file -), so it is
     never an argv element.
-  - Key names are a whitelist; free-form text can never become key input.
+  - Keys are validated against a chord vocabulary (known modifiers + base);
+    free-form text can never become key input.
   - Pane existence is checked with `list-panes -t` (exits non-zero for an
     unknown target; display-message is unsuitable — it exits 0 and falls back
     to the current client).
@@ -19,21 +20,79 @@
            (java.nio.charset StandardCharsets)
            (java.util UUID)))
 
-(def allowed-key-names
-  "The only key names a press-keys plan may deliver."
-  (into #{"Enter" "Escape" "Up" "Down" "Left" "Right" "Tab" "BSpace"
-          "C-a" "C-c" "C-d" "C-k" "C-u" "C-w"}
-        (map str (range 1 10))))
+;; --- key chord vocabulary ---------------------------------------------------
+;; Keys are tmux-style chords: modifier prefixes + a base key, e.g. "C-M-t"
+;; (ctrl-alt-t), "M-Right", "Enter", "C-a", "1". Each chord renders to a tmux
+;; send-keys token AND a ydotool keycode vector, so the same config command
+;; works on either backend. Config commands/macros are trusted authors; the
+;; *router* (voice) only ever emits its own narrow grammar, so widening this
+;; vocabulary does not widen what speech can synthesize. Validation only
+;; confirms a chord is renderable (known modifier + known base).
 
-(def ^:private focus-keycodes
-  "Key name -> Linux input keycodes for the ydotool backend. A multi-code
-  entry is a chord: press in order, release in reverse."
-  (merge {"Enter" [28] "Escape" [1] "Tab" [15] "BSpace" [14]
-          "Up" [103] "Down" [108] "Left" [105] "Right" [106]
-          "C-a" [29 30] "C-c" [29 46] "C-d" [29 32]
-          "C-k" [29 37] "C-u" [29 22] "C-w" [29 17]}
-         ;; KEY_1..KEY_9 are keycodes 2..10
-         (into {} (map (fn [n] [(str n) [(inc n)]]) (range 1 10)))))
+(def ^:private modifiers
+  "Modifier prefix -> {:tmux <send-keys letter> :code <linux keycode>}."
+  {"C" {:tmux "C" :code 29}    ; ctrl  (KEY_LEFTCTRL)
+   "M" {:tmux "M" :code 56}    ; alt   (KEY_LEFTALT)
+   "S" {:tmux "S" :code 42}    ; shift (KEY_LEFTSHIFT)
+   "s" {:tmux "s" :code 125}}) ; super (KEY_LEFTMETA) — focus target only
+
+(def ^:private mod-order
+  "Canonical render order so a chord's token/keycodes are deterministic."
+  ["C" "M" "S" "s"])
+
+(def ^:private base-keys
+  "Base key -> {:tmux <send-keys name> :code <linux input-event-code>}. Letter,
+  arrow and Enter codes cross-checked against the historical focus-keycodes."
+  (merge
+   ;; letters a-z: KEY_A=30, KEY_B=48, ... tmux name is the literal char
+   (into {} (map (fn [[k c]] [k {:tmux k :code c}])
+                 {"a" 30 "b" 48 "c" 46 "d" 32 "e" 18 "f" 33 "g" 34 "h" 35
+                  "i" 23 "j" 36 "k" 37 "l" 38 "m" 50 "n" 49 "o" 24 "p" 25
+                  "q" 16 "r" 19 "s" 31 "t" 20 "u" 22 "v" 47 "w" 17 "x" 45
+                  "y" 21 "z" 44}))
+   ;; digits: KEY_1=2..KEY_9=10, KEY_0=11
+   (into {} (map (fn [n] [(str n) {:tmux (str n) :code (if (zero? n) 11 (inc n))}])
+                 (range 0 10)))
+   ;; F1-F12: KEY_F1=59..KEY_F10=68, KEY_F11=87, KEY_F12=88
+   (into {} (map (fn [n] [(str "F" n) {:tmux (str "F" n)
+                                       :code (cond (<= n 10) (+ 58 n) (= n 11) 87 :else 88)}])
+                 (range 1 13)))
+   {"Enter"  {:tmux "Enter"    :code 28}
+    "Escape" {:tmux "Escape"   :code 1}
+    "Tab"    {:tmux "Tab"      :code 15}
+    "Space"  {:tmux "Space"    :code 57}
+    "BSpace" {:tmux "BSpace"   :code 14}
+    "Up"     {:tmux "Up"       :code 103}
+    "Down"   {:tmux "Down"     :code 108}
+    "Left"   {:tmux "Left"     :code 105}
+    "Right"  {:tmux "Right"    :code 106}
+    "Home"   {:tmux "Home"     :code 102}
+    "End"    {:tmux "End"      :code 107}
+    "PgUp"   {:tmux "PageUp"   :code 104}
+    "PgDn"   {:tmux "PageDown" :code 109}}))
+
+(defn parse-chord
+  "Parse a tmux-style chord (\"C-M-t\") into {:mods #{\"C\" \"M\"} :base \"t\"}, or
+  nil if any modifier prefix or the base key is unknown. The base is the final
+  hyphen-segment; everything before it must be modifier letters."
+  [s]
+  (when (string? s)
+    (let [parts (str/split s #"-")
+          base (last parts)
+          mods (butlast parts)]
+      (when (and (contains? base-keys base) (every? modifiers mods))
+        {:mods (set mods) :base base}))))
+
+(defn valid-chord? [s] (some? (parse-chord s)))
+
+(defn- chord->tmux [{:keys [mods base]}]
+  (str (str/join (map #(str (get-in modifiers [% :tmux]) "-")
+                      (filter mods mod-order)))
+       (get-in base-keys [base :tmux])))
+
+(defn- chord->codes [{:keys [mods base]}]
+  (conj (mapv #(get-in modifiers [% :code]) (filter mods mod-order))
+        (get-in base-keys [base :code])))
 
 (defn run-proc
   "Run one argv vector. :in is written to stdin; :env entries are set on the
@@ -132,7 +191,9 @@
                      :label "tmux send-keys Enter"}))))
 
 (defn- tmux-keys-plan [config pane keys*]
-  [{:argv (into (tmux-prefix config) (into ["send-keys" "-t" pane] keys*))
+  [{:argv (into (tmux-prefix config)
+                (into ["send-keys" "-t" pane]
+                      (map #(chord->tmux (parse-chord %)) keys*)))
     :label "tmux send-keys"}])
 
 (defn- tmux-execute [plan-steps details config pane dry-run]
@@ -154,10 +215,10 @@
   {"YDOTOOL_SOCKET" (config/ydotool-socket config)})
 
 (defn- key-args
-  "ydotool key arguments for one key name: press codes in order, release in
-  reverse (chords like C-c work out naturally)."
-  [key-name]
-  (let [codes (focus-keycodes key-name)]
+  "ydotool key arguments for one chord: press codes in order, release in
+  reverse (so chords like C-c / C-M-t work out naturally)."
+  [chord]
+  (let [codes (chord->codes (parse-chord chord))]
     (concat (map #(str % ":1") codes)
             (map #(str % ":0") (reverse codes)))))
 
@@ -194,10 +255,10 @@
       (err-result "none" "No target configured (dais-ctl target set ...)")
 
       (and (= :press-keys action)
-           (not (and (seq keys) (every? allowed-key-names keys))))
+           (not (and (seq keys) (every? valid-chord? keys))))
       (err-result (name backend)
                   (str "Refusing to send keys: " (pr-str keys)
-                       " contains a key outside the allowed set."))
+                       " contains an unknown key or modifier."))
 
       (= :tmux backend)
       (let [pane (:pane target)

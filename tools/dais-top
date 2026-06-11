@@ -415,7 +415,14 @@ function helpBody(w) {
   L.push(` ${C.cyan}voice${C.reset}  ${C.dim}${ctx}${C.reset}`);
   const row = (say, does) =>
     `  ${C.green}${truncate(say, 22).padEnd(22)}${C.reset}${C.dim}${truncate(does, Math.max(20, w - 26))}${C.reset}`;
-  for (const c of [...(hd.controls ?? []), ...(hd.commands ?? [])]) L.push(row(c.say, c.does));
+  for (const c of hd.controls ?? []) L.push(row(c.say, c.does));
+  const cmds = hd.commands ?? [];
+  for (const c of cmds.filter((c) => !c.config)) L.push(row(c.say, c.does));
+  const configured = cmds.filter((c) => c.config);
+  if (configured.length) {
+    L.push(` ${C.cyan}configured${C.reset}  ${C.dim}(config/dais.edn)${C.reset}`);
+    for (const c of configured) L.push(row(c.say, c.does));
+  }
   const kp = hd.keypress;
   if (kp) {
     L.push(` ${C.dim}key presses: ${kp.triggers.join("/")} + keys${C.reset}`);
