@@ -41,6 +41,14 @@
  ;; many minutes (decimals ok, nil/0 disables).
  :vad-idle-off-min 5
 
+ ;; Confidence gate: an utterance whose mean avg_logprob is below this floor is
+ ;; NOT delivered — it's flagged ("Uncertain — say again?") so you just repeat.
+ ;; Distinct from the :vad avg_logprob_min hard drop (kills hallucinated noise);
+ ;; this one catches real-but-garbled speech AFTER it routed to typing/keys.
+ ;; Controls ("voice off", "unmute") always pass. nil disables (deliver as-is).
+ ;; Speech usually lands well above -0.6; start around -0.8 and tune by feel.
+ :confidence-min-logprob nil
+
  ;; The resident ear worker (capture/VAD/ASR). :cmd is absolute so a
  ;; systemd/KDE-launched daemon needs no user PATH.
  :ear {:enabled? true

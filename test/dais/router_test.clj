@@ -133,6 +133,24 @@
     (testing "missing :lang defaults to the base language (en)"
       (is (= :control (:action (router/route "voice off" {:commands cmds})))))))
 
+(deftest confidence-gate
+  (testing "below the floor, deliverable plans are refused with :uncertain + the heard text"
+    (let [plan (route "please review PR 123" :min-logprob -0.8 :logprob -1.5)]
+      (is (= :none (:action plan)))
+      (is (true? (:uncertain plan)))
+      (is (= "please review PR 123" (:text plan))))
+    (is (= :none (:action (route "press enter" :min-logprob -0.8 :logprob -1.5))))
+    (let [cmds (router/merged-commands {"setup" {:macro [{:keys ["Enter"]}]}})]
+      (is (= :none (:action (router/route "setup" {:commands cmds
+                                                   :min-logprob -0.8 :logprob -1.5}))))))
+  (testing "controls always pass, however low the confidence (escape hatch)"
+    (is (= :control (:action (route "voice off" :min-logprob -0.8 :logprob -3.0))))
+    (is (= :control (:action (route "unmute" :muted true :min-logprob -0.8 :logprob -3.0)))))
+  (testing "at/above the floor, or with the gate off, everything flows as before"
+    (is (= :type-text (:action (route "hello there" :min-logprob -0.8 :logprob -0.3))))
+    (is (= :type-text (:action (route "hello there" :logprob -3.0))))         ; no floor
+    (is (= :type-text (:action (route "hello there" :min-logprob -0.8))))))   ; no logprob (inject)
+
 (deftest set-language-control
   (testing "step->plan carries the :to target language"
     (is (= {:action :control :control :set-language :to "fi"}

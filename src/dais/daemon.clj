@@ -193,6 +193,7 @@
     (:control plan) (assoc "control" (name (:control plan)))
     (:slot plan) (assoc "slot" (:slot plan))
     (:to plan) (assoc "to" (:to plan))
+    (:uncertain plan) (assoc "uncertain" true)
     (:reason plan) (assoc "reason" (:reason plan))))
 
 (defn- execute-plan!
@@ -273,11 +274,18 @@
   "Turn a router plan into executed effects. Returns the events to log."
   [ctx plan ids]
   (case (:action plan)
-    :none [(daemon-event "action.error"
-                         {"stage" "router" "dropped" true
-                          "error" (:reason plan)
-                          "plan" (plan->json plan)}
-                         ids)]
+    :none (do
+            ;; Confidence-gated refusal: flash what was heard — repeating is
+            ;; cheaper than undoing garbage typed into an agent.
+            (when (:uncertain plan)
+              (notify/notify! (:config ctx) "Uncertain — say again?"
+                              (str "“" (:text plan) "”")
+                              {:icon "dialog-question"}))
+            [(daemon-event "action.error"
+                           {"stage" "router" "dropped" true
+                            "error" (:reason plan)
+                            "plan" (plan->json plan)}
+                           ids)])
     ;; :set-language has an ear side effect (not a pure state transition), so it
     ;; goes through set-language! rather than control-transition/transition!.
     :control (let [res (if (= :set-language (:control plan))
@@ -304,7 +312,10 @@
      ;; Untagged commands belong to the base language; the utterance's own
      ;; language (:lang, set per-transcript in handle-publish) selects the
      ;; live command set.
-     :base-lang (get-in config [:asr :language] "en")}))
+     :base-lang (get-in config [:asr :language] "en")
+     ;; Confidence floor for delivery (nil = off); the utterance's own
+     ;; avg_logprob is added per-transcript in handle-publish.
+     :min-logprob (:confidence-min-logprob config)}))
 
 (defn- handle-publish
   [{:keys [state] :as ctx} {:strs [event]}]
@@ -319,7 +330,9 @@
           ;; The transcript reports its own language (forced or autodetected);
           ;; it selects which language's commands can match this utterance.
           lang (get-in event ["payload" "language"])
-          plan (router/route text (assoc (route-opts ctx) :lang lang))
+          plan (router/route text (assoc (route-opts ctx)
+                                         :lang lang
+                                         :logprob (get-in event ["payload" "avg_logprob"])))
           ids {:trace-id trace-id :parent-id (get transcript "id")}]
       ;; Armed is single-shot: consumed by this utterance, hit or miss.
       (swap! state assoc :armed false :last-utterance text)

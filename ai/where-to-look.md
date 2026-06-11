@@ -5,6 +5,8 @@
 add a voice command :: config/dais.edn :router :commands # or built-ins in src/dais/router.clj default-commands
 add a key or chord :: src/dais/router.clj (key-words / ctrl-letters) + src/dais/executor.clj (allowed-key-names / focus-keycodes) # BOTH whitelists + tests, or it routes but refuses to deliver
 tune VAD / drop gates :: config/dais.edn :vad # underscore keys on purpose (JSON to the ear); defaults in ear/dais_ear.py DEFAULT_TUNING
+confidence gate ("uncertain — say again?") :: config/dais.edn :confidence-min-logprob + src/dais/router.clj confidence-gate # refuses delivery below the floor; :control plans always pass
+switch transcription language :: dais-ctl set language <code|auto> / dais-top l # session-only; needs a multilingual :asr :model (not *.en); commands tagged :lang match only their language
 endpointing behavior :: ear/dais_ear.py VadStream.run # pre-roll, hysteresis, startup mute, max length
 mode transitions / refusals :: src/dais/state.clj # pure; ear control-message mapping in src/dais/ear.clj ear-message
 socket protocol / new op :: src/dais/daemon.clj handle-request # one lock serializes all requests

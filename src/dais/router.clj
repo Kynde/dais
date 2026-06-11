@@ -203,50 +203,70 @@
   (when (str/starts-with? norm (str prefix " "))
     (subs norm (inc (count prefix)))))
 
+(defn- confidence-gate
+  "When a confidence floor is configured and this utterance's avg_logprob is
+  below it, a plan that would DELIVER something (type/keys/macro) is replaced
+  by a flagged refusal — better to repeat than to type garbage. :control plans
+  pass: \"unmute\"/\"voice off\" must stay reachable however mumbled (same
+  escape-hatch principle as mute), and a mishear must exactly match a phrase
+  to get here at all. The :uncertain flag lets the daemon/TUI surface it as
+  \"say again?\" rather than a silent drop."
+  [plan text {:keys [min-logprob logprob]}]
+  (if (and min-logprob logprob
+           (< logprob min-logprob)
+           (#{:type-text :press-keys :macro} (:action plan)))
+    {:action :none :uncertain true :text (single-line text)
+     :reason (str "uncertain: avg_logprob " logprob " < " min-logprob)}
+    plan))
+
 (defn route
   "Classify one utterance. opts:
-    :strategy   :whole-match | :prefix | :key-armed
-    :commands   normalized command map (see merged-commands)
-    :enter-mode :no-enter | :enter-auto | :enter-always
-    :armed      true when the next utterance was armed as command-only
-    :muted      true when muted — drop everything but unmute/voice-off
-    :prefix     spoken prefix word for :prefix strategy
-    :lang       language of THIS utterance (forced active, or detected under
-                autodetect); defaults to :base-lang
-    :base-lang  language an untagged command belongs to (default \"en\")"
+    :strategy    :whole-match | :prefix | :key-armed
+    :commands    normalized command map (see merged-commands)
+    :enter-mode  :no-enter | :enter-auto | :enter-always
+    :armed       true when the next utterance was armed as command-only
+    :muted       true when muted — drop everything but unmute/voice-off
+    :prefix      spoken prefix word for :prefix strategy
+    :lang        language of THIS utterance (forced active, or detected under
+                 autodetect); defaults to :base-lang
+    :base-lang   language an untagged command belongs to (default \"en\")
+    :min-logprob confidence floor (config :confidence-min-logprob); nil = off
+    :logprob     this utterance's mean avg_logprob, from the transcript"
   [text {:keys [strategy commands enter-mode armed muted prefix lang base-lang]
-         :or {strategy :whole-match enter-mode :no-enter prefix "do" base-lang "en"}}]
+         :or {strategy :whole-match enter-mode :no-enter prefix "do" base-lang "en"}
+         :as opts}]
   (let [commands (commands-for-lang commands (or lang base-lang) base-lang)
-        norm (normalize text)]
-    (cond
-      (str/blank? norm)
-      {:action :none :reason "empty transcript"}
+        norm (normalize text)
+        plan (cond
+               (str/blank? norm)
+               {:action :none :reason "empty transcript"}
 
-      ;; Muted: warm but inert — only an unmute/voice-off escape gets through.
-      muted
-      (let [plan (escape-hatch norm commands)]
-        (if (#{:unmute :voice-off} (:control plan))
-          plan
-          {:action :none :reason "muted"}))
+               ;; Muted: warm but inert — only an unmute/voice-off escape gets through.
+               muted
+               (let [plan (escape-hatch norm commands)]
+                 (if (#{:unmute :voice-off} (:control plan))
+                   plan
+                   {:action :none :reason "muted"}))
 
-      ;; Armed: the utterance MUST be a command; a miss does nothing.
-      armed
-      (or (as-command norm commands)
-          {:action :none :reason "armed: not a recognized command"})
+               ;; Armed: the utterance MUST be a command; a miss does nothing.
+               armed
+               (or (as-command norm commands)
+                   {:action :none :reason "armed: not a recognized command"})
 
-      :else
-      (case strategy
-        :whole-match
-        (or (as-command norm commands)
-            (dictation text enter-mode))
+               :else
+               (case strategy
+                 :whole-match
+                 (or (as-command norm commands)
+                     (dictation text enter-mode))
 
-        :prefix
-        (if-let [rest* (strip-prefix norm prefix)]
-          (or (as-command rest* commands)
-              {:action :none :reason "prefixed: not a recognized command"})
-          (or (escape-hatch norm commands)
-              (dictation text enter-mode)))
+                 :prefix
+                 (if-let [rest* (strip-prefix norm prefix)]
+                   (or (as-command rest* commands)
+                       {:action :none :reason "prefixed: not a recognized command"})
+                   (or (escape-hatch norm commands)
+                       (dictation text enter-mode)))
 
-        :key-armed
-        (or (escape-hatch norm commands)
-            (dictation text enter-mode))))))
+                 :key-armed
+                 (or (escape-hatch norm commands)
+                     (dictation text enter-mode))))]
+    (confidence-gate plan text opts)))

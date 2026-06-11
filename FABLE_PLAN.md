@@ -297,3 +297,8 @@ agent-pane send guard, per-utterance worker processes.
 - Plasma widget indicator (anything can read `state.json`).
 - Auto-punctuation/normalization maps ("hash" → "#") — only if agent-side cleanup
   proves insufficient.
+- `dais-ctl calibrate` — guided VAD/gate tuning: record ambient + a few sample
+  utterances, then suggest `:vad` threshold/silence/gate values (and a
+  `:confidence-min-logprob` floor) from the measured `asr.level` stream and
+  transcript metrics. Build when ASR misbehaves in practice, not before
+  (2026-06-12).

@@ -394,6 +394,36 @@
     (is (= "control.state_changed" (get (second (get resp "events")) "type")))
     (is (= "fi" (get (r {"op" "query" "query" "status"}) "language")))))
 
+(deftest confidence-gate-end-to-end
+  (let [ctx (daemon/make-ctx {:config (assoc config :confidence-min-logprob -0.8)
+                              :events-dir (tmp-dir "dais-ev")
+                              :runtime-dir (tmp-dir "dais-rt")
+                              :dry-run true})
+        shout (fn [text logprob]
+                (daemon/handle-request
+                 ctx {"op" "publish"
+                      "event" (event/make-event {:type "voice.transcript"
+                                                 :source {"module" "test"}
+                                                 :payload (cond-> {"text" text}
+                                                            logprob (assoc "avg_logprob" logprob))})}))]
+    (testing "garbled dictation is refused and flagged, not typed"
+      (let [resp (shout "blurgh mumble" -1.4)]
+        (is (= "none" (get-in resp ["plan" "action"])))
+        (is (true? (get-in resp ["plan" "uncertain"])))
+        (is (= "action.error" (get (second (get resp "events")) "type")))))
+    (testing "confident dictation flows; a low-confidence control still works"
+      (is (= "type-text" (get-in (shout "hello world" -0.2) ["plan" "action"])))
+      (is (= "control" (get-in (shout "voice off" -2.0) ["plan" "action"]))))
+    (testing "transcripts without avg_logprob (dais-ctl inject) are untouched"
+      (is (= "type-text" (get-in (shout "hello world" nil) ["plan" "action"])))))
+  (testing "gate absent from config (default): low confidence delivered as-is"
+    (is (= "type-text"
+           (get-in (req {"op" "publish"
+                         "event" (event/make-event {:type "voice.transcript"
+                                                    :source {"module" "test"}
+                                                    :payload {"text" "mumble" "avg_logprob" -2.0}})})
+                   ["plan" "action"])))))
+
 (deftest invalid-and-unknown
   (is (false? (get (req {"op" "publish" "event" {"type" "voice.transcript"}}) "ok")))
   (is (false? (get (req {"op" "nope"}) "ok")))
