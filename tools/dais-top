@@ -34,6 +34,11 @@ const C = {
   // same on solarized dark/light and stock xterm. Semantic colors above
   // stay themed on purpose.
   gray: `${ESC}38;5;241m`,
+  // Waveform data colors, also from the cube: solarized renders ANSI green
+  // as olive (#859900) — a 1-cell band of it reads as a weird orange. The
+  // waveform is data viz, not themed UI, so it gets stable true hues.
+  speech: `${ESC}38;5;77m`,   // clear green
+  ambient: `${ESC}38;5;66m`,  // muted teal
   bgGreen: `${ESC}42;30m`, bgRed: `${ESC}41;37m`,
   bgGray: `${ESC}48;5;240m${ESC}38;5;253m`,
 };
@@ -261,24 +266,26 @@ function fmtDuration(ms) {
 const REV = `${ESC}7m`;
 
 // Mirrored full-width waveform from the level ring, newest at the right.
-// Each sample is a centered bar: the bottom row rises with lower-block
-// glyphs; the top row "hangs" by reverse-videoing the complementary glyph
+// The mirror axis is the seam BETWEEN the two rows: the top row rises to it
+// with plain lower-block glyphs (which sit on their cell's floor = the axis),
+// the bottom row hangs from it by reverse-videoing the complementary glyph
 // (reverse paints the glyph's EMPTY part with the foreground color, so the
-// colored area hangs from the cell top). Speech samples green, ambient cyan,
-// silence a dim baseline. Scale follows the ring's own max, so it re-adapts
-// to mic gain within ~30 s of history.
+// colored area descends from the cell top = the axis). Silence is a single
+// dim spine on the axis; speech swells symmetrically around it. Speech
+// samples green, ambient teal. Scale follows the ring's own max, so it
+// re-adapts to mic gain within ~30 s of history.
 function waveform(width) {
   const ring = S.levels.slice(-width);
   let scale = 0.08;
   for (const s of ring) if (s.v > scale) scale = s.v;
   const pad = width - ring.length;
-  let top = " ".repeat(pad);
-  let bot = pad ? C.gray + "▁".repeat(pad) + C.reset : "";
+  let top = pad ? C.gray + "▁".repeat(pad) + C.reset : "";
+  let bot = " ".repeat(pad);
   for (const s of ring) {
     const k = Math.min(8, Math.round((s.v / scale) * 8));
-    const col = s.sp ? C.green : C.cyan;
-    top += k === 0 ? " " : REV + col + (k === 8 ? " " : SPARK[7 - k]) + C.reset;
-    bot += k === 0 ? C.gray + "▁" + C.reset : col + SPARK[k - 1] + C.reset;
+    const col = s.sp ? C.speech : C.ambient;
+    top += k === 0 ? C.gray + "▁" + C.reset : col + SPARK[k - 1] + C.reset;
+    bot += k === 0 ? " " : REV + col + (k === 8 ? " " : SPARK[7 - k]) + C.reset;
   }
   return [top, bot];
 }
@@ -347,9 +354,9 @@ function render() {
     const spin = S.transcribing ? `${C.magenta}${SPINNER[frame % SPINNER.length]} transcribing…${C.reset}` :
       S.speech ? `${C.green}🗣 speech${C.reset}` : `${C.dim}listening${C.reset}`;
     const dots = 10, on = Math.min(dots, Math.round(S.prob * dots));
-    const probBar = (S.prob >= 0.5 ? C.green : C.gray) + "●".repeat(on) +
+    const probBar = (S.prob >= 0.5 ? C.speech : C.gray) + "●".repeat(on) +
       C.gray + "○".repeat(dots - on) + C.reset;
-    lines.push(` ${C.dim}vad${C.reset}   ${probBar} ${S.prob >= 0.5 ? C.green : C.dim}${S.prob.toFixed(2)}${C.reset}  ${spin}`);
+    lines.push(` ${C.dim}vad${C.reset}   ${probBar} ${S.prob >= 0.5 ? C.speech : C.dim}${S.prob.toFixed(2)}${C.reset}  ${spin}`);
   } else if (S.mode === "manual-recording") {
     const pulse = "▰".repeat(1 + (frame % 8)) + "▱".repeat(8 - (frame % 8));
     const spin = S.transcribing ? ` ${C.magenta}${SPINNER[frame % SPINNER.length]} transcribing…${C.reset}` : "";
