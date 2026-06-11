@@ -109,14 +109,17 @@ the footer — repeating is cheaper than undoing garbage.
 Control keys: `v` VAD toggle · `r` record latch · `Esc` send Escape ·
 `1`–`5` switch target · `Tab` next live target (skips dead ones) ·
 `t` pane picker · `a` arm · `m` mute (warm pause) · `d` dry-run toggle ·
-`e` cycle enter-mode · `s` cycle router strategy · `l` cycle transcription
-language · `?` help · `q` quit. Press `?` for a full
+`e` cycle enter-mode · `s` cycle router strategy · `?` help · `q` quit.
+The footer lists only the frequent keys; press `?` for the full
 key + voice-command reference — it also lists the unobtrusive cycle keys
 (`>` next / `<` prev target) and your config commands, pulled live from the
-daemon so the list never drifts from `config/dais.edn`. The `e`/`s`/`l` toggles
+daemon so the list never drifts from `config/dais.edn`. The `e`/`s` toggles
 (also `dais-ctl set enter-mode|strategy|language ...`) are **session-only** —
 a daemon restart returns to the config defaults; calibration knobs (VAD
 tuning, idle timeout, confidence floor) stay config-file only on purpose.
+Language switching has no dais-top key on purpose: it only makes sense
+after swapping config to a multilingual model, so it stays a deliberate
+`dais-ctl set language` act.
 
 Entirely optional: when no dais-top is connected the daemon broadcasts
 nothing and the ear skips level computation entirely (the daemon toggles the

@@ -4,8 +4,11 @@
 //   DAIS_SOCKET=...  socket override (default $XDG_RUNTIME_DIR/dais/control.sock)
 //
 // Keys: v VAD · r latch · Esc escape · 1-5 target · Tab next-live · t pick
-//       a arm · m mute · d dry-run · e enter-mode · s strategy · l lang · ? help · q quit
-//       (hidden, in ? overlay: > next target · < prev target)
+//       a arm · m mute · d dry-run · e enter-mode · s strategy · ? help · q quit
+//       (the footer shows only the frequent ones; ? lists everything,
+//        incl. > next / < prev target. Language switching is deliberately
+//        NOT bound here — it needs a multilingual model, i.e. a config swap;
+//        use dais-ctl set language.)
 //
 // Entirely optional: the daemon runs identically without it. Subscribing
 // turns on the ear's ~8 Hz level meter events; they stop when we disconnect.
@@ -43,8 +46,8 @@ const S = {
   earAlive: false,
   strategy: "?",
   enterMode: "?",
-  language: "?",          // active transcription language (en | fi | auto)
-  languages: ["en", "auto"], // selectable set (from status; "auto" included)
+  language: "?",          // active transcription language (display only;
+                          // switching is dais-ctl's job — needs a config swap)
   activeSlot: null,
   targets: {},            // slot -> {type, pane}
   levels: [],             // ring of {v: rms, sp: was-speech} samples (~8 Hz)
@@ -229,7 +232,6 @@ function seed() {
       S.muted = st.muted; S.earAlive = st.ear_alive; S.strategy = st.strategy;
       S.enterMode = st.enter_mode; S.activeSlot = st.active_slot;
       if (st.language) S.language = st.language;
-      if (Array.isArray(st.languages) && st.languages.length) S.languages = st.languages;
       // status says we're currently open -> start the live clock now
       if (st.mode !== "off" && openSince == null) openSince = Date.now();
       if (st.mode === "off" && openSince != null) openSince = null;
@@ -288,6 +290,23 @@ function modeBadge() {
 
 function truncate(s, n) {
   return s.length > n ? s.slice(0, n - 1) + "…" : s;
+}
+
+// Clip a rendered line to `width` VISIBLE columns: ANSI escapes pass through
+// at zero width, output is cut once the budget is spent, and a reset is
+// appended so a cut can't leak styling into the next line. (Double-width
+// emoji count as one — close enough; the lines carrying them are short.)
+function clipLine(s, width) {
+  let out = "", vis = 0, i = 0;
+  while (i < s.length) {
+    if (s[i] === "\x1b") {
+      const m = /^\x1b\[[0-9;?]*[a-zA-Z]/.exec(s.slice(i));
+      if (m) { out += m[0]; i += m[0].length; continue; }
+    }
+    if (vis >= width) break;
+    out += s[i]; vis++; i++;
+  }
+  return out + C.reset;
 }
 
 function render() {
@@ -410,10 +429,14 @@ function render() {
     ` · ${C.bold}${c.utterances}${C.reset} utterances · ${C.bold}${c.words}${C.reset} words` +
     ` · ${C.bold}${c.drops}${C.reset} drops · ${asr}` +
     `   ${C.dim}${S.strategy}/${S.enterMode}/${S.language}${C.reset}`);
+  // Frequent keys only — ? lists the rest (Esc, Tab, >/<, s, …).
   const noteStr = Date.now() < S.noteUntil ? `  ${C.yellow}${S.note}${C.reset}` : "";
-  lines.push(` ${C.dim}[v]ad [r]ec [Esc] esc [1-5] target [Tab] next-live [t] pick [a]rm [m]ute [d]ry-run [e]nter-mode [s]trategy [l]ang [?] help [q]uit${C.reset}${noteStr}`);
+  lines.push(` ${C.dim}[v]ad [r]ec [1-5] [t]arget [a]rm [m]ute [d]ry [e]nter [?] help [q]uit${C.reset}${noteStr}`);
 
-  out.write(`${ESC}H${ESC}2J` + lines.slice(0, h).join("\n"));
+  // Hard-clip to the REAL terminal width (w has a 60-col floor for layout):
+  // a wrapped line scrolls the whole frame and rolls the top row off.
+  const realW = out.columns ?? 80;
+  out.write(`${ESC}H${ESC}2J` + lines.slice(0, h).map((l) => clipLine(l, realW)).join("\n"));
 }
 
 function describeTarget(t) {
@@ -440,7 +463,6 @@ function helpBody(w) {
   L.push(key("d", "toggle dry-run (route & show, don't deliver)"));
   L.push(key("e", "cycle enter-mode"));
   L.push(key("s", "cycle router strategy"));
-  L.push(key("l", "cycle transcription language (needs multilingual model)"));
   L.push(key("q", "quit"));
   const hd = S.help;
   L.push("");
@@ -502,9 +524,6 @@ function onKey(key) {
   } else if (key === "s") {
     const next = cycle(STRATEGIES, S.strategy);
     request({ op: "settings", strategy: next }, ack(`router: ${next}`));
-  } else if (key === "l") {
-    const next = cycle(S.languages, S.language);
-    request({ op: "settings", language: next }, ack(`language: ${next}`));
   }
   else if (key === "\x1b") request({ op: "control", action: "esc" }, ack("escape sent"));
   else if (key === "\t") request({ op: "target", action: "next-live" }, ack("next live target"));
