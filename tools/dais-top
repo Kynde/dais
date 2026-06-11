@@ -47,11 +47,9 @@ const S = {
   languages: ["en", "auto"], // selectable set (from status; "auto" included)
   activeSlot: null,
   targets: {},            // slot -> {type, pane}
-  levels: [],             // recent rms values (ring)
+  levels: [],             // ring of {v: rms, sp: was-speech} samples (~8 Hz)
   prob: 0,
   speech: false,
-  peak: 0,
-  peakAt: 0,
   transcribing: false,
   heard: [],              // {time, text, outcome, drop, trace}
   picker: null,           // {panes, idx, awaitSlot} while the t-overlay is open
@@ -72,11 +70,12 @@ function ingest(ev, live) {
   const t = ev.type;
   const p = ev.payload ?? {};
   if (t === "asr.level") {
-    S.levels.push(p.rms ?? 0);
-    if (S.levels.length > 48) S.levels.shift();
+    // Keep the speech flag per sample so the waveform can color history:
+    // green where the VAD heard speech, cyan where it was ambient.
+    S.levels.push({ v: p.rms ?? 0, sp: !!p.speech });
+    if (S.levels.length > 240) S.levels.shift();
     S.prob = p.prob ?? 0;
     S.speech = !!p.speech;
-    if ((p.rms ?? 0) >= S.peak) { S.peak = p.rms; S.peakAt = Date.now(); }
     return;
   }
   const isToday = (ev.time ?? "").startsWith(today());
@@ -99,6 +98,11 @@ function ingest(ev, live) {
     if (entry) {
       entry.outcome = describeAction(t, p);
       if (live) S.flashUntil = Date.now() + 600;
+    }
+    // Confidence-gated refusal: flash what was heard so repeating is a
+    // glance-and-go, not a dig through the heard list.
+    if (live && t === "action.error" && p.plan?.uncertain) {
+      note(`uncertain — say again? “${p.plan.text ?? ""}”`);
     }
   } else if (t === "control.state_changed") {
     trackListenTime(p.mode, ev.time, live);
@@ -234,27 +238,29 @@ function fmtDuration(ms) {
   return h ? `${h}h${String(m).padStart(2, "0")}m` : m ? `${m}m${String(r).padStart(2, "0")}s` : `${r}s`;
 }
 
-function sparkline(width) {
-  const lvls = S.levels.slice(-width);
-  const scale = Math.max(S.peak, 0.08);
-  let s = "";
-  for (const v of lvls) {
-    const i = Math.min(SPARK.length - 1, Math.floor((v / scale) * SPARK.length));
-    s += SPARK[i];
-  }
-  return s.padStart(width, " ");
-}
+const REV = `${ESC}7m`;
 
-function bar(value, max, width) {
-  const filled = Math.min(width, Math.round((value / max) * width));
-  const peakPos = Math.min(width - 1, Math.round((S.peak / max) * width));
-  let s = "";
-  for (let i = 0; i < width; i++) {
-    if (i < filled) s += S.speech ? `${C.green}█` : `${C.cyan}█`;
-    else if (i === peakPos && Date.now() - S.peakAt < 2000) s += `${C.yellow}┃`;
-    else s += `${C.gray}░`;
+// Mirrored full-width waveform from the level ring, newest at the right.
+// Each sample is a centered bar: the bottom row rises with lower-block
+// glyphs; the top row "hangs" by reverse-videoing the complementary glyph
+// (reverse paints the glyph's EMPTY part with the foreground color, so the
+// colored area hangs from the cell top). Speech samples green, ambient cyan,
+// silence a dim baseline. Scale follows the ring's own max, so it re-adapts
+// to mic gain within ~30 s of history.
+function waveform(width) {
+  const ring = S.levels.slice(-width);
+  let scale = 0.08;
+  for (const s of ring) if (s.v > scale) scale = s.v;
+  const pad = width - ring.length;
+  let top = " ".repeat(pad);
+  let bot = pad ? C.gray + "▁".repeat(pad) + C.reset : "";
+  for (const s of ring) {
+    const k = Math.min(8, Math.round((s.v / scale) * 8));
+    const col = s.sp ? C.green : C.cyan;
+    top += k === 0 ? " " : REV + col + (k === 8 ? " " : SPARK[7 - k]) + C.reset;
+    bot += k === 0 ? C.gray + "▁" + C.reset : col + SPARK[k - 1] + C.reset;
   }
-  return s + C.reset;
+  return [top, bot];
 }
 
 function modeBadge() {
@@ -296,13 +302,17 @@ function render() {
   lines.push(` ${C.bold}dais${C.reset} ${modeBadge()}${mutedBadge}  ${targetStr}   ${right}`);
   lines.push(sep);
 
-  // mic meter
-  const cur = S.levels.length ? S.levels[S.levels.length - 1] : 0;
+  // mic meter — a two-row mirrored waveform while VAD is live
   if (S.mode === "vad-listening") {
+    const [wTop, wBot] = waveform(w - 7);
+    lines.push(` ${C.dim}mic${C.reset}   ${wTop}`);
+    lines.push(`       ${wBot}`);
     const spin = S.transcribing ? `${C.magenta}${SPINNER[frame % SPINNER.length]} transcribing…${C.reset}` :
       S.speech ? `${C.green}🗣 speech${C.reset}` : `${C.dim}listening${C.reset}`;
-    lines.push(` mic ${C.cyan}${sparkline(24)}${C.reset}  ${bar(cur, Math.max(S.peak, 0.08), 16)}` +
-      `  ${C.dim}prob${C.reset} ${S.prob >= 0.5 ? C.green : C.gray}${S.prob.toFixed(2)}${C.reset}  ${spin}`);
+    const dots = 10, on = Math.min(dots, Math.round(S.prob * dots));
+    const probBar = (S.prob >= 0.5 ? C.green : C.gray) + "●".repeat(on) +
+      C.gray + "○".repeat(dots - on) + C.reset;
+    lines.push(` ${C.dim}vad${C.reset}   ${probBar} ${S.prob >= 0.5 ? C.green : C.dim}${S.prob.toFixed(2)}${C.reset}  ${spin}`);
   } else if (S.mode === "manual-recording") {
     const pulse = "▰".repeat(1 + (frame % 8)) + "▱".repeat(8 - (frame % 8));
     const spin = S.transcribing ? ` ${C.magenta}${SPINNER[frame % SPINNER.length]} transcribing…${C.reset}` : "";

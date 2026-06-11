@@ -94,23 +94,28 @@ tools/dais-ctl shutdown                  # stop the daemon (cleans up socket/mar
 tools/dais-top
 ```
 
-Full-screen status cockpit: mode badge (pulsing while recording), htop-style
-mic level bar + sparkline with the Silero speech probability (VAD mode only —
-the latch records to a file, so it shows a pulse animation instead), target
-slots with the active one highlighted, the last utterances with their outcome
-(`→ Enter`, `→ typed`, `✗ dropped: …`), and today's counters (listened time,
-utterances, words, drops, mean ASR latency) seeded from the event log.
+Full-screen status cockpit: mode badge (pulsing while recording), a live
+mirrored waveform of the mic (green where the VAD heard speech, cyan ambient,
+flat gray baseline when quiet) with a Silero speech-probability meter (VAD
+mode only — the latch records to a file, so it shows a pulse animation
+instead), target slots with the active one highlighted, the last utterances
+with their outcome (`→ Enter`, `→ typed`, `✗ dropped: …`), and today's
+counters (listened time, utterances, words, drops, mean ASR latency) seeded
+from the event log. A confidence-gated refusal (see `:confidence-min-logprob`
+in `config/dais.edn`) flashes *uncertain — say again?* with the heard text in
+the footer — repeating is cheaper than undoing garbage.
 
 Control keys: `v` VAD toggle · `r` record latch · `Esc` send Escape ·
 `1`–`5` switch target · `Tab` next live target (skips dead ones) ·
 `t` pane picker · `a` arm · `m` mute (warm pause) · `d` dry-run toggle ·
-`e` cycle enter-mode · `s` cycle router strategy · `?` help · `q` quit. Press `?` for a full
+`e` cycle enter-mode · `s` cycle router strategy · `l` cycle transcription
+language · `?` help · `q` quit. Press `?` for a full
 key + voice-command reference — it also lists the unobtrusive cycle keys
 (`>` next / `<` prev target) and your config commands, pulled live from the
-daemon so the list never drifts from `config/dais.edn`. The `e`/`s` toggles (also
-`dais-ctl set enter-mode ...` / `set strategy ...`) are **session-only** —
+daemon so the list never drifts from `config/dais.edn`. The `e`/`s`/`l` toggles
+(also `dais-ctl set enter-mode|strategy|language ...`) are **session-only** —
 a daemon restart returns to the config defaults; calibration knobs (VAD
-tuning, idle timeout) stay config-file only on purpose.
+tuning, idle timeout, confidence floor) stay config-file only on purpose.
 
 Entirely optional: when no dais-top is connected the daemon broadcasts
 nothing and the ear skips level computation entirely (the daemon toggles the
