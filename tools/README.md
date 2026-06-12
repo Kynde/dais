@@ -108,8 +108,12 @@ the footer — repeating is cheaper than undoing garbage.
 
 Control keys: `v` VAD toggle · `r` record latch · `Esc` send Escape ·
 `1`–`5` switch target · `Tab` next live target (skips dead ones) ·
-`t` pane picker · `a` arm · `m` mute (warm pause) · `d` dry-run toggle ·
-`e` cycle enter-mode · `s` cycle router strategy · `?` help · `q` quit.
+`t` target picker (tmux panes plus a `⌖ focus` row, so a slot can always
+be pointed back at the focused app) · `a` arm · `m` mute (warm pause) ·
+`d` dry-run toggle · `e` cycle enter-mode · `s` cycle router strategy ·
+`w` toggle swyd, the Tesla terminal viewer (`~/swyd`; a `SWYD` badge
+shows while broadcasting — it is a public tunnel; `DAIS_SWYD` overrides
+the tool path, absent tool hides it all) · `?` help · `q` quit.
 The footer lists only the frequent keys; press `?` for the full
 key + voice-command reference — it also lists the unobtrusive cycle keys
 (`>` next / `<` prev target) and your config commands, pulled live from the

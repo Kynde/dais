@@ -4,7 +4,8 @@
 //   DAIS_SOCKET=...  socket override (default $XDG_RUNTIME_DIR/dais/control.sock)
 //
 // Keys: v VAD · r latch · Esc escape · 1-5 target · Tab next-live · t pick
-//       a arm · m mute · d dry-run · e enter-mode · s strategy · ? help · q quit
+//       a arm · m mute · d dry-run · e enter-mode · s strategy · w swyd
+//       ? help · q quit
 //       (the footer shows only the frequent ones; ? lists everything,
 //        incl. > next / < prev target. Language switching is deliberately
 //        NOT bound here — it needs a multilingual model, i.e. a config swap;
@@ -15,6 +16,7 @@
 
 "use strict";
 const net = require("node:net");
+const { execFile } = require("node:child_process");
 
 const SOCKET =
   process.env.DAIS_SOCKET ??
@@ -44,7 +46,7 @@ const C = {
   // 45=pink, 101=bright-red slot which solarized maps to true orange.
   bgGreen: `${ESC}42;30m`, bgRed: `${ESC}41;37m`,
   bgYellow: `${ESC}43;30m`, bgMagenta: `${ESC}45;30m`,
-  bgOrange: `${ESC}101;30m`,
+  bgOrange: `${ESC}101;30m`, bgCyan: `${ESC}46;30m`,
   bgGray: `${ESC}48;5;240m${ESC}38;5;253m`,
 };
 const SPARK = "▁▂▃▄▅▆▇█";
@@ -81,7 +83,38 @@ const S = {
   counters: { listenMs: 0, utterances: 0, words: 0, drops: 0, asrMsSum: 0, asrN: 0 },
   note: "",               // transient footer note
   noteUntil: 0,
+  swyd: { state: "unknown", busy: false }, // Tesla terminal viewer (~/swyd)
 };
+
+// ---------- swyd (Tesla terminal viewer, a sibling project) ----------
+// ~/swyd serves the tmux session to the car over an ngrok tunnel. dais-top
+// only shells out to its toggle tool: a badge while broadcasting (it IS a
+// public URL — worth a loud indicator), w to flip. Hidden when absent.
+const SWYD = process.env.DAIS_SWYD ??
+  require("node:path").join(require("node:os").homedir(), "swyd", "tools", "swyd");
+
+function pollSwyd() {
+  if (S.swyd.busy || S.swyd.state === "missing") return;
+  execFile(SWYD, ["status", "--json"], { timeout: 4000 }, (err, stdout) => {
+    if (err && err.code === "ENOENT") { S.swyd.state = "missing"; return; }
+    try { S.swyd.state = JSON.parse(stdout).active ? "on" : "off"; }
+    catch { /* transient — keep the previous state */ }
+  });
+}
+
+function toggleSwyd() {
+  if (S.swyd.state === "missing") return note("swyd tool not found");
+  if (S.swyd.busy) return;
+  const turningOn = S.swyd.state !== "on";
+  S.swyd.busy = true;
+  note(turningOn ? "swyd: starting (tunnel may take a few seconds)…" : "swyd: stopping…");
+  execFile(SWYD, [turningOn ? "on" : "off"], { timeout: 30000 }, (err, stdout, stderr) => {
+    S.swyd.busy = false;
+    const line = String(err ? (stderr || stdout) : stdout).split("\n")[0]?.trim();
+    note(line || (err ? "swyd: failed" : "swyd: ok"));
+    pollSwyd();
+  });
+}
 
 function today() { return new Date().toISOString().slice(0, 10); }
 function clockOf(iso) { return iso ? iso.slice(11, 19) : "--:--:--"; }
@@ -352,7 +385,11 @@ function render() {
       : S.execution === "live" ? `${C.bold}${C.green}live${C.reset}`
       : `${C.dim}${S.execution}${C.reset}`);
   const mutedBadge = S.muted ? ` ${C.bgOrange} 🔇 MUTED ${C.reset}` : "";
-  lines.push(` ${C.bold}dais${C.reset} ${modeBadge()}${mutedBadge}  ${targetStr}   ${right}`);
+  // Broadcasting badge: while swyd is on, the terminal is on a public URL.
+  const swydStr = S.swyd.busy ? `  ${C.dim}swyd ⋯${C.reset}`
+    : S.swyd.state === "on" ? `  ${C.bgCyan} SWYD ${C.reset}`
+    : S.swyd.state === "off" ? `  ${C.dim}swyd –${C.reset}` : "";
+  lines.push(` ${C.bold}dais${C.reset} ${modeBadge()}${mutedBadge}  ${targetStr}   ${right}${swydStr}`);
   lines.push(sep);
 
   // mic meter — a two-row mirrored waveform while VAD is live
@@ -415,7 +452,8 @@ function render() {
     const rows = Math.max(3, h - lines.length - 4);
     pk.panes.slice(0, rows).forEach((p, i) => {
       const cur = i === pk.idx;
-      const mark = p.agent ? `${C.green}★${C.reset}` : " ";
+      const mark = p.focus ? `${C.cyan}⌖${C.reset}`
+        : p.agent ? `${C.green}★${C.reset}` : " ";
       const slot = p.slot != null ? ` ${C.cyan}=slot ${p.slot}${C.reset}` : "";
       const path = tilde(p.path ?? "");
       const row = ` ${mark} ${p.pane}  ${C.dim}[${p.command}]${C.reset} ${C.dim}${truncate(path, 30)}${C.reset}${slot}`;
@@ -487,6 +525,7 @@ function helpBody(w) {
   L.push(key("d", "toggle dry-run (route & show, don't deliver)"));
   L.push(key("e", "cycle enter-mode"));
   L.push(key("s", "cycle router strategy"));
+  L.push(key("w", "toggle swyd (Tesla terminal viewer — public tunnel!)"));
   L.push(key("q", "quit"));
   const hd = S.help;
   L.push("");
@@ -548,7 +587,7 @@ function onKey(key) {
   } else if (key === "s") {
     const next = cycle(STRATEGIES, S.strategy);
     request({ op: "settings", strategy: next }, ack(`router: ${next}`));
-  }
+  } else if (key === "w") toggleSwyd();
   else if (key === "\x1b") request({ op: "control", action: "esc" }, ack("escape sent"));
   else if (key === "\t") request({ op: "target", action: "next-live" }, ack("next live target"));
   // Hidden cycle keys (documented only in the ? overlay): blind next/prev.
@@ -579,8 +618,16 @@ function onHelpKey(key) {
 
 function openPicker() {
   request({ op: "target", action: "panes" }, (resp) => {
-    if (!resp?.ok) return note(`✗ ${resp?.error ?? "no panes"}`);
-    S.picker = { panes: resp.panes, idx: 0, awaitSlot: false };
+    // "focus" is a target TYPE, not a tmux pane, so the daemon's panes op
+    // can't list it. Synthesize a first row: reassigning a slot away from
+    // focus must be reversible from the TUI ("set" accepts pane:"focus").
+    const focusSlot = Object.keys(S.targets)
+      .find((k) => S.targets[k]?.type === "focus");
+    const focus = { pane: "focus", command: "ydotool", path: "the focused app",
+                    focus: true, slot: focusSlot != null ? Number(focusSlot) : null };
+    if (!resp?.ok) note(`tmux panes unavailable (${resp?.error ?? "?"}) — focus only`);
+    S.picker = { panes: [focus, ...(resp?.ok ? resp.panes ?? [] : [])],
+                 idx: 0, awaitSlot: false };
   });
 }
 
@@ -656,6 +703,9 @@ function main() {
       if (tg?.ok) { S.targets = tg.targets ?? {}; S.activeSlot = tg.active_slot; }
     });
   }, 1500);
+  // swyd is independent of the daemon; a slow poll keeps the badge honest.
+  pollSwyd();
+  setInterval(pollSwyd, 5000);
 }
 
 main();
