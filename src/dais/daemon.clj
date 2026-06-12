@@ -59,6 +59,32 @@
     :vad-listening ["Listening" "audio-input-microphone"]
     :manual-recording ["Recording" "media-record"]))
 
+(defn change-notification
+  "[summary icon] describing what THIS transition actually changed, by
+  diffing old vs new state. A dry-run toggle while listening must say
+  dry-run, not re-announce \"Listening\" (the old behavior — every
+  transition got the mode label). Falls back to the mode label. Public
+  for tests."
+  [old st]
+  (cond
+    (not= (:mode old) (:mode st)) (mode-notification st)
+    (not= (:dry-run old) (:dry-run st))
+    (if (:dry-run st)
+      ["Dry-run ON — planning only, nothing delivered" "media-playback-pause"]
+      ["LIVE — delivering again" "media-playback-start"])
+    (not= (:muted old) (:muted st))
+    (if (:muted st)
+      ["Muted — utterances dropped until \"unmute\"" "microphone-sensitivity-muted"]
+      ["Unmuted" "audio-input-microphone"])
+    (not= (:armed old) (:armed st))
+    (if (:armed st)
+      ["Armed — next utterance must be a command" "input-keyboard"]
+      ["Disarmed" "input-keyboard"])
+    (or (not= (:active-slot old) (:active-slot st))
+        (not= (:targets old) (:targets st)))
+    ["Target" "video-display"]
+    :else (mode-notification st)))
+
 (defn- target-label [st]
   (let [t (state/active-target st)]
     (cond (nil? t) "no target"
@@ -146,7 +172,7 @@
         (when-let [msg (ear/ear-message old-mode (:mode new-state) via)]
           (when-let [e (some-> (:ear ctx) deref)]
             (ear/send! e msg)))
-        (let [[label icon] (mode-notification new-state)]
+        (let [[label icon] (change-notification old new-state)]
           (notify/notify! config label
                           (str "Target: " (target-label new-state))
                           {:icon icon :urgency "low"}))

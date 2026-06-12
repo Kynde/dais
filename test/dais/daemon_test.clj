@@ -456,6 +456,22 @@
     (is (some #(= "resume" (get-in % ["payload" "via"]))
               (get (req {"op" "events" "last" 10}) "events")))))
 
+(deftest change-notification-describes-the-change
+  (let [st {:mode :vad-listening :dry-run false :muted false :armed false
+            :active-slot 1 :targets {1 {:type :focus}}}]
+    (testing "the regression: dry-run toggled while listening says dry-run, not Listening"
+      (is (re-find #"(?i)dry-run" (first (daemon/change-notification st (assoc st :dry-run true)))))
+      (is (re-find #"(?i)live" (first (daemon/change-notification (assoc st :dry-run true) st)))))
+    (testing "mode changes keep the mode label"
+      (is (= "Voice off" (first (daemon/change-notification st (assoc st :mode :off))))))
+    (testing "mute / arm / target each name themselves"
+      (is (re-find #"(?i)muted" (first (daemon/change-notification st (assoc st :muted true)))))
+      (is (re-find #"(?i)armed" (first (daemon/change-notification st (assoc st :armed true)))))
+      (is (re-find #"(?i)target" (first (daemon/change-notification st (assoc st :active-slot 2))))))
+    (testing "mode change wins when both changed (voice-off while dry-run flips)"
+      (is (= "Voice off" (first (daemon/change-notification
+                                 st (assoc st :mode :off :dry-run true))))))))
+
 (deftest invalid-and-unknown
   (is (false? (get (req {"op" "publish" "event" {"type" "voice.transcript"}}) "ok")))
   (is (false? (get (req {"op" "nope"}) "ok")))
