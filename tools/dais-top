@@ -5,7 +5,7 @@
 //
 // Keys: v VAD · r latch · Esc escape · 1-5 target · Tab next-live · t pick
 //       a arm · m mute · d dry-run · e enter-mode · s strategy · w swyd
-//       ? help · q quit
+//       c theme · ? help · q quit
 //       (the footer shows only the frequent ones; ? lists everything,
 //        incl. > next / < prev target. Language switching is deliberately
 //        NOT bound here — it needs a multilingual model, i.e. a config swap;
@@ -16,6 +16,9 @@
 
 "use strict";
 const net = require("node:net");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
 const { execFile } = require("node:child_process");
 
 const SOCKET =
@@ -25,30 +28,137 @@ const SOCKET =
 // ---------- terminal ----------
 const ESC = "\x1b[";
 const out = process.stdout;
-const C = {
-  reset: `${ESC}0m`, bold: `${ESC}1m`, dim: `${ESC}2m`,
-  green: `${ESC}32m`, red: `${ESC}31m`, yellow: `${ESC}33m`,
-  cyan: `${ESC}36m`, magenta: `${ESC}35m`,
-  // Neutral grays come from the 256-color cube, NOT ANSI bright-black:
-  // Solarized maps bright-black to (near-)background, which made the
-  // separators, waveform baseline and unfilled meter dots invisible.
-  // Indexes ≥16 are never remapped by terminal themes, so these read the
-  // same on solarized dark/light and stock xterm. Semantic colors above
-  // stay themed on purpose.
-  gray: `${ESC}38;5;241m`,
-  // Waveform data colors, also from the cube: solarized renders ANSI green
-  // as olive (#859900) — a 1-cell band of it reads as a weird orange. The
-  // waveform is data viz, not themed UI, so it gets stable true hues.
-  speech: `${ESC}38;5;77m`,   // clear green
-  ambient: `${ESC}38;5;66m`,  // muted teal
-  // Badge backgrounds — picked for what SOLARIZED renders (the user's theme,
-  // not going anywhere): 42=olive-green, 41=red, 43=yellow-orange,
-  // 45=pink, 101=bright-red slot which solarized maps to true orange.
-  bgGreen: `${ESC}42;30m`, bgRed: `${ESC}41;37m`,
-  bgYellow: `${ESC}43;30m`, bgMagenta: `${ESC}45;30m`,
-  bgOrange: `${ESC}101;30m`, bgCyan: `${ESC}46;30m`,
-  bgGray: `${ESC}48;5;240m${ESC}38;5;253m`,
+const fg = (n) => `${ESC}38;5;${n}m`;
+const bgc = (b, f) => `${ESC}48;5;${b}m${ESC}38;5;${f}m`;
+const RESET = `${ESC}0m`, BOLD = `${ESC}1m`;
+
+// ---------- themes ----------
+// Three looks, cycled with c (the pick persists across runs):
+//   solarized — the original: semantic ANSI colors that follow the terminal
+//               theme; 256-cube only where Solarized's remapping bites
+//               (grays, waveform). Calm instrument panel.
+//   vivid     — same layout, hotter pigments: everything from the 256 cube,
+//               so it ignores the terminal theme and just glows.
+//   pollock   — rainbow, Rubik's cube and a Jackson Pollock molten into one.
+//               Different colours all around; static, no effects.
+//
+// A theme is the C table plus optional hooks: sep(w), title(), footer(text),
+// stamp(row), tag(word,i) for label words (each i is a stable per-word hue
+// slot), and val, a plain color for values (counter numbers, the header pane
+// name). Hooks that are absent fall back to the plain rendering.
+
+const RAIN = [196, 202, 208, 214, 220, 226, 154, 46, 49, 51, 39, 63, 93, 129, 201, 198];
+function rainbow(s) {
+  let o = "", j = 0;
+  for (const ch of s) o += ch === " " ? " " : fg(RAIN[j++ % RAIN.length]) + ch;
+  return o + RESET;
+}
+
+// Memoized colored separator: colorAt(i, w) picks the cube index per column.
+const memoSep = (colorAt) => {
+  const memo = new Map();
+  return (w) => {
+    let s = memo.get(w);
+    if (!s) {
+      s = "";
+      for (let i = 0; i < w; i++) s += fg(colorAt(i, w)) + "─";
+      memo.set(w, s += RESET);
+    }
+    return s;
+  };
 };
+
+const THEMES = {
+  solarized: {
+    reset: RESET, bold: BOLD, dim: `${ESC}2m`,
+    green: `${ESC}32m`, red: `${ESC}31m`, yellow: `${ESC}33m`,
+    cyan: `${ESC}36m`, magenta: `${ESC}35m`,
+    // Neutral grays come from the 256-color cube, NOT ANSI bright-black:
+    // Solarized maps bright-black to (near-)background, which made the
+    // separators, waveform baseline and unfilled meter dots invisible.
+    // Indexes ≥16 are never remapped by terminal themes, so these read the
+    // same on solarized dark/light and stock xterm. Semantic colors above
+    // stay themed on purpose.
+    gray: fg(241),
+    // Waveform data colors, also from the cube: solarized renders ANSI green
+    // as olive (#859900) — a 1-cell band of it reads as a weird orange. The
+    // waveform is data viz, not themed UI, so it gets stable true hues.
+    speech: fg(77),   // clear green
+    ambient: fg(66),  // muted teal
+    // Badge backgrounds — picked for what SOLARIZED renders (the user's theme,
+    // not going anywhere): 42=olive-green, 41=red, 43=yellow-orange,
+    // 45=pink, 101=bright-red slot which solarized maps to true orange.
+    bgGreen: `${ESC}42;30m`, bgRed: `${ESC}41;37m`,
+    bgYellow: `${ESC}43;30m`, bgMagenta: `${ESC}45;30m`,
+    bgOrange: `${ESC}101;30m`, bgCyan: `${ESC}46;30m`,
+    bgGray: bgc(240, 253),
+  },
+  vivid: {
+    reset: RESET, bold: BOLD,
+    // "dim" is steel blue, not gray — de-emphasis still carries a hue here.
+    dim: fg(67),
+    green: fg(48), red: fg(203), yellow: fg(221),
+    cyan: fg(45), magenta: fg(213),
+    gray: fg(60),
+    speech: fg(118), ambient: fg(39),
+    bgGreen: bgc(41, 16), bgRed: bgc(197, 231),
+    bgYellow: bgc(220, 16), bgMagenta: bgc(201, 16),
+    bgOrange: bgc(208, 16), bgCyan: bgc(45, 16),
+    bgGray: bgc(60, 253),
+    val: fg(123),
+    tag: (() => {
+      const P = [45, 213, 221, 48, 209, 141];
+      return (s, i) => fg(P[i % P.length]) + s + RESET;
+    })(),
+    title: () => `${BOLD}${fg(51)}dais${RESET}`,
+    // One cyan→violet→pink sweep across the width.
+    sep: (() => {
+      const RAMP = [51, 45, 39, 63, 99, 135, 171, 207];
+      return memoSep((i, w) => RAMP[Math.floor((i / w) * RAMP.length)]);
+    })(),
+  },
+  pollock: {
+    reset: RESET, bold: BOLD,
+    dim: fg(141),
+    green: fg(46), red: fg(196), yellow: fg(226),
+    cyan: fg(51), magenta: fg(201),
+    gray: fg(245),
+    speech: fg(201), ambient: fg(81),
+    bgGreen: bgc(46, 16), bgRed: bgc(196, 231),
+    bgYellow: bgc(226, 16), bgMagenta: bgc(129, 231),
+    bgOrange: bgc(208, 16), bgCyan: bgc(51, 16),
+    bgGray: bgc(93, 231),
+    val: fg(220),
+    // Solid hue per word, Rubik's-cube style. i*5 strides the 16-color
+    // wheel so neighboring slots don't land on neighboring hues.
+    tag: (s, i) => fg(RAIN[(i * 5) % RAIN.length]) + s + RESET,
+    title: () => BOLD + rainbow("dais"),
+    // Rainbow bands, 4 columns each.
+    sep: memoSep((i) => RAIN[(i >> 2) % RAIN.length]),
+    footer: (text) => " " + rainbow(text),
+    stamp: (row) => fg(RAIN[row % RAIN.length]),
+  },
+};
+
+const THEME_ORDER = Object.keys(THEMES);
+const THEME_FILE = path.join(
+  process.env.XDG_STATE_HOME ?? path.join(os.homedir(), ".local", "state"),
+  "dais", "top-theme");
+let theme = "solarized";
+try {
+  const t = fs.readFileSync(THEME_FILE, "utf8").trim();
+  if (THEMES[t]) theme = t;
+} catch { /* first run */ }
+let C = THEMES[theme];
+
+function cycleTheme() {
+  theme = THEME_ORDER[(THEME_ORDER.indexOf(theme) + 1) % THEME_ORDER.length];
+  C = THEMES[theme];
+  note(`theme: ${theme}`);
+  fs.mkdir(path.dirname(THEME_FILE), { recursive: true }, (err) => {
+    if (!err) fs.writeFile(THEME_FILE, theme + "\n", () => {});
+  });
+}
 const SPARK = "▁▂▃▄▅▆▇█";
 const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
@@ -91,7 +201,7 @@ const S = {
 // only shells out to its toggle tool: a badge while broadcasting (it IS a
 // public URL — worth a loud indicator), w to flip. Hidden when absent.
 const SWYD = process.env.DAIS_SWYD ??
-  require("node:path").join(require("node:os").homedir(), "swyd", "tools", "swyd");
+  path.join(os.homedir(), "swyd", "tools", "swyd");
 
 function pollSwyd() {
   if (S.swyd.busy || S.swyd.state === "missing") return;
@@ -366,17 +476,21 @@ function render() {
   frame++;
   const w = Math.max(60, out.columns ?? 80);
   const h = out.rows ?? 24;
-  const sep = C.gray + "─".repeat(w) + C.reset;
+  const sep = C.sep ? C.sep(w) : C.gray + "─".repeat(w) + C.reset;
   const lines = [];
+  // Label words and values: themed when the theme says so, otherwise the
+  // fallback style (fb) — solarized renders exactly as before the themes.
+  const tag = (s, i, fb = "") => C.tag ? C.tag(s, i) : fb ? fb + s + C.reset : s;
+  const val = C.val ?? "";
 
   // header
   const activeT = S.targets[S.activeSlot];
   const targetStr = S.activeSlot != null
-    ? `target ${C.bold}[${S.activeSlot}]${C.reset} ` +
+    ? `${tag("target", 0)} ${C.bold}[${S.activeSlot}]${C.reset} ` +
       (activeT?.alive === false
         ? `${C.red}${describeTarget(activeT)} ✗ gone${C.reset}`
-        : describeTarget(activeT))
-    : "no target";
+        : `${val}${describeTarget(activeT)}${C.reset}`)
+    : tag("no target", 0);
   // Exceptional states get loud inverse badges; normal states stay calm
   // text. live is bold green (it IS the state that delivers keystrokes).
   const right = `${S.earAlive ? C.green + "ear ✓" : C.red + "ear ✗"}${C.reset}  ` +
@@ -389,7 +503,8 @@ function render() {
   const swydStr = S.swyd.busy ? `  ${C.dim}swyd ⋯${C.reset}`
     : S.swyd.state === "on" ? `  ${C.bgCyan} SWYD ${C.reset}`
     : S.swyd.state === "off" ? `  ${C.dim}swyd –${C.reset}` : "";
-  lines.push(` ${C.bold}dais${C.reset} ${modeBadge()}${mutedBadge}  ${targetStr}   ${right}${swydStr}`);
+  const title = C.title ? C.title() : `${C.bold}dais${C.reset}`;
+  lines.push(` ${title} ${modeBadge()}${mutedBadge}  ${targetStr}   ${right}${swydStr}`);
   lines.push(sep);
 
   // mic meter — a two-row mirrored waveform while VAD is live
@@ -425,7 +540,7 @@ function render() {
     const col = dead ? C.red : active ? C.cyan : C.dim;
     return active ? `${C.bold}${col}[${label}]${C.reset}` : `${col} ${label} ${C.reset}`;
   });
-  lines.push(` targets  ${tgts.join("  ") || C.dim + "none configured" + C.reset}`);
+  lines.push(` ${tag("targets", 1)}  ${tgts.join("  ") || C.dim + "none configured" + C.reset}`);
   lines.push(sep);
 
   // heard list — or an overlay (help / pane picker) while open
@@ -460,12 +575,13 @@ function render() {
       lines.push(cur ? `${ESC}7m${row}${C.reset}` : row);
     });
   } else {
-    lines.push(` ${C.bold}heard${C.reset}`);
+    lines.push(` ${C.bold}${tag("heard", 2)}${C.reset}`);
     const heardRows = Math.max(3, h - lines.length - 4);
     const flash = Date.now() < S.flashUntil;
     S.heard.slice(0, heardRows).forEach((e, i) => {
+      const stamp = C.stamp ? C.stamp(i) : C.dim;
       if (e.drop) {
-        lines.push(`  ${C.dim}${e.time}${C.reset}  ${C.red}✗${C.reset} ${C.dim}dropped: ${e.drop}` +
+        lines.push(`  ${stamp}${e.time}${C.reset}  ${C.red}✗${C.reset} ${C.dim}dropped: ${e.drop}` +
           (e.text ? ` (“${truncate(e.text, 24)}”)` : "") + C.reset);
       } else {
         // Dictation is verbatim speech — quoted, plain. A command was
@@ -476,7 +592,7 @@ function render() {
         const shown = isCmd
           ? `${C.yellow}»${C.reset} ${hl}${text}${C.reset}`
           : `${C.dim}“${C.reset}${hl}${text}${C.reset}${C.dim}”${C.reset}`;
-        lines.push(`  ${C.dim}${e.time}${C.reset}  ${shown} ` +
+        lines.push(`  ${stamp}${e.time}${C.reset}  ${shown} ` +
           `${C.cyan}${e.outcome ?? ""}${C.reset}`);
       }
     });
@@ -487,13 +603,14 @@ function render() {
   const c = S.counters;
   const asr = c.asrN ? `asr ø${(c.asrMsSum / c.asrN / 1000).toFixed(1)}s` : "asr –";
   lines.push(sep);
-  lines.push(` ${C.dim}today${C.reset}  listened ${C.bold}${fmtDuration(liveListenMs())}${C.reset}` +
-    ` · ${C.bold}${c.utterances}${C.reset} utterances · ${C.bold}${c.words}${C.reset} words` +
-    ` · ${C.bold}${c.drops}${C.reset} drops · ${asr}` +
+  lines.push(` ${tag("today", 3, C.dim)}  ${tag("listened", 4)} ${C.bold}${val}${fmtDuration(liveListenMs())}${C.reset}` +
+    ` · ${C.bold}${val}${c.utterances}${C.reset} ${tag("utterances", 5)} · ${C.bold}${val}${c.words}${C.reset} ${tag("words", 6)}` +
+    ` · ${C.bold}${val}${c.drops}${C.reset} ${tag("drops", 7)} · ${tag(asr, 8)}` +
     `   ${C.dim}${S.strategy}/${S.enterMode}/${S.language}${C.reset}`);
-  // Frequent keys only — ? lists the rest (Esc, Tab, >/<, s, …).
+  // Frequent keys only — ? lists the rest (Esc, Tab, >/<, s, c, …).
   const noteStr = Date.now() < S.noteUntil ? `  ${C.yellow}${S.note}${C.reset}` : "";
-  lines.push(` ${C.dim}[v]ad [r]ec [1-5] [t]arget [a]rm [m]ute [d]ry [e]nter [?] help [q]uit${C.reset}${noteStr}`);
+  const keysTxt = "[v]ad [r]ec [1-5] [t]arget [a]rm [m]ute [d]ry [e]nter [?] help [q]uit";
+  lines.push((C.footer ? C.footer(keysTxt) : ` ${C.dim}${keysTxt}${C.reset}`) + noteStr);
 
   // Hard-clip to the REAL terminal width (w has a 60-col floor for layout):
   // a wrapped line scrolls the whole frame and rolls the top row off.
@@ -526,6 +643,7 @@ function helpBody(w) {
   L.push(key("e", "cycle enter-mode"));
   L.push(key("s", "cycle router strategy"));
   L.push(key("w", "toggle swyd (Tesla terminal viewer — public tunnel!)"));
+  L.push(key("c", `color theme: ${THEME_ORDER.join(" → ")} (now ${theme})`));
   L.push(key("q", "quit"));
   const hd = S.help;
   L.push("");
@@ -588,6 +706,7 @@ function onKey(key) {
     const next = cycle(STRATEGIES, S.strategy);
     request({ op: "settings", strategy: next }, ack(`router: ${next}`));
   } else if (key === "w") toggleSwyd();
+  else if (key === "c") cycleTheme();
   else if (key === "\x1b") request({ op: "control", action: "esc" }, ack("escape sent"));
   else if (key === "\t") request({ op: "target", action: "next-live" }, ack("next live target"));
   // Hidden cycle keys (documented only in the ? overlay): blind next/prev.
