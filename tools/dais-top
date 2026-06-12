@@ -39,7 +39,12 @@ const C = {
   // waveform is data viz, not themed UI, so it gets stable true hues.
   speech: `${ESC}38;5;77m`,   // clear green
   ambient: `${ESC}38;5;66m`,  // muted teal
+  // Badge backgrounds — picked for what SOLARIZED renders (the user's theme,
+  // not going anywhere): 42=olive-green, 41=red, 43=yellow-orange,
+  // 45=pink, 101=bright-red slot which solarized maps to true orange.
   bgGreen: `${ESC}42;30m`, bgRed: `${ESC}41;37m`,
+  bgYellow: `${ESC}43;30m`, bgMagenta: `${ESC}45;30m`,
+  bgOrange: `${ESC}101;30m`,
   bgGray: `${ESC}48;5;240m${ESC}38;5;253m`,
 };
 const SPARK = "▁▂▃▄▅▆▇█";
@@ -339,10 +344,14 @@ function render() {
         ? `${C.red}${describeTarget(activeT)} ✗ gone${C.reset}`
         : describeTarget(activeT))
     : "no target";
+  // Exceptional states get loud inverse badges; normal states stay calm
+  // text. live is bold green (it IS the state that delivers keystrokes).
   const right = `${S.earAlive ? C.green + "ear ✓" : C.red + "ear ✗"}${C.reset}  ` +
-    `${S.armed ? C.yellow + "ARMED" : C.dim + "armed –"}${C.reset}  ` +
-    `${S.execution === "dry-run" ? C.bold + C.yellow : C.dim}${S.execution}${C.reset}`;
-  const mutedBadge = S.muted ? ` ${C.bold}${C.yellow}🔇 MUTED${C.reset}` : "";
+    (S.armed ? `${C.bgMagenta} ARMED ${C.reset}  ` : `${C.dim}armed –${C.reset}  `) +
+    (S.execution === "dry-run" ? `${C.bgYellow} DRY-RUN ${C.reset}`
+      : S.execution === "live" ? `${C.bold}${C.green}live${C.reset}`
+      : `${C.dim}${S.execution}${C.reset}`);
+  const mutedBadge = S.muted ? ` ${C.bgOrange} 🔇 MUTED ${C.reset}` : "";
   lines.push(` ${C.bold}dais${C.reset} ${modeBadge()}${mutedBadge}  ${targetStr}   ${right}`);
   lines.push(sep);
 
