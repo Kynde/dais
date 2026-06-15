@@ -7,6 +7,8 @@ Codex) on Fedora/KDE Wayland. Speak; dais transcribes locally
 to a tmux pane or the focused app. No cloud, no intent LLM — the agent being
 driven does its own transcript cleanup (see `BRIEF.md`).
 
+![dais-top — the live control surface](dais.png)
+
 ```text
 F9/F10 toggles ──► Clojure daemon (router · targets · executor · audit log)
                         │ ndjson                 │ tmux paste / ydotool
