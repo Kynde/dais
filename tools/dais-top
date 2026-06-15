@@ -606,7 +606,7 @@ function render() {
   lines.push(` ${tag("today", 3, C.dim)}  ${tag("listened", 4)} ${C.bold}${val}${fmtDuration(liveListenMs())}${C.reset}` +
     ` · ${C.bold}${val}${c.utterances}${C.reset} ${tag("utterances", 5)} · ${C.bold}${val}${c.words}${C.reset} ${tag("words", 6)}` +
     ` · ${C.bold}${val}${c.drops}${C.reset} ${tag("drops", 7)} · ${tag(asr, 8)}` +
-    `   ${C.dim}${S.strategy}/${S.enterMode}/${S.language}${C.reset}`);
+    `   ${C.bold}${C.cyan}${S.strategy}${C.reset}${C.dim}/${C.reset}${C.bold}${C.green}${S.enterMode}${C.reset}${C.dim}/${C.reset}${C.bold}${C.magenta}${S.language}${C.reset}`);
   // Frequent keys only — ? lists the rest (Esc, Tab, >/<, s, c, …).
   const noteStr = Date.now() < S.noteUntil ? `  ${C.yellow}${S.note}${C.reset}` : "";
   const keysTxt = "[v]ad [r]ec [1-5] [t]arget [a]rm [m]ute [d]ry [e]nter [?] help [q]uit";
