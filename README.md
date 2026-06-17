@@ -1,20 +1,32 @@
 # dais — Do As I Say
 
-Personal Linux voice control for driving TUI coding agents (Claude Code,
-Codex) on Fedora/KDE Wayland. Speak; dais transcribes locally
-(faster-whisper + Silero VAD), routes each utterance as either a **command**
-("press enter", "select two", "voice off") or **dictation**, and delivers it
-to a tmux pane or the focused app. No cloud, no intent LLM — the agent being
-driven does its own transcript cleanup (see `BRIEF.md`).
+Personal Linux voice control for controlling TUI coding agents for Linux.
+
+Dais transcribes locally and routes each uttterance as either a **command**
+or **dictation**. The output is delivered to a tmux pane or the focused app.
+
+The core idea here is that the agent receiving the voice input can clean up the transcript. All that's needed is to inform the agent about it, and for this there's the brief prompt for that.
 
 ![dais-top — the live control surface](dais.png)
 
 ```text
-F9/F10 toggles ──► Clojure daemon (router · targets · executor · audit log)
-                        │ ndjson                 │ tmux paste / ydotool
-                        ▼                        ▼
-              Python "ear" (pixi): mic · Silero VAD · whisper, resident
+
+mic · VAD · transcription
+          |
+       daemon  --> commands   ---\
+          |                      |
+          \------> dictation  -------> tmux paste / ydotool
+
 ```
+
+Primary motivation: hands-free coding in the car
+
+- [dais](https://github.com/Kynde/dais) voice controls an agent session
+- [wsyd](https://github.com/Kynde/wsyd) shows the tmux session on a browser in my car while driving
+
+Related:
+
+- [airc](https://github.com/Kynde/airc) Tmux remote control for Android
 
 ## Run
 
