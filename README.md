@@ -22,11 +22,11 @@ mic · VAD · transcription
 Primary motivation: hands-free coding in the car
 
 - [dais](https://github.com/Kynde/dais) voice controls an agent session
-- [swyd](https://github.com/Kynde/swyd) shows the tmux session on a browser in my car while driving
+- [airc](https://github.com/Kynde/airc) Tmux remote control supporting remote viewing in a browser (e.g. Tesla) and has Android app for also controlling.
 
-Related:
+Deprecated
 
-- [airc](https://github.com/Kynde/airc) Tmux remote control for Android
+- [swyd](https://github.com/Kynde/swyd) First phase tmux viewer written for Tesla's browser. The features were merged into airc, and swyd is now deprecated.
 
 ## Run
 
