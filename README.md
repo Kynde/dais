@@ -22,7 +22,7 @@ mic · VAD · transcription
 Primary motivation: hands-free coding in the car
 
 - [dais](https://github.com/Kynde/dais) voice controls an agent session
-- [wsyd](https://github.com/Kynde/wsyd) shows the tmux session on a browser in my car while driving
+- [swyd](https://github.com/Kynde/swyd) shows the tmux session on a browser in my car while driving
 
 Related:
 
