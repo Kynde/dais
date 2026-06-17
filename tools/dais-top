@@ -4,7 +4,7 @@
 //   DAIS_SOCKET=...  socket override (default $XDG_RUNTIME_DIR/dais/control.sock)
 //
 // Keys: v VAD · r latch · Esc escape · 1-5 target · Tab next-live · t pick
-//       a arm · m mute · d dry-run · e enter-mode · s strategy · w swyd
+//       a arm · m mute · d dry-run · e enter-mode · s strategy · w airc
 //       c theme · ? help · q quit
 //       (the footer shows only the frequent ones; ? lists everything,
 //        incl. > next / < prev target. Language switching is deliberately
@@ -193,36 +193,36 @@ const S = {
   counters: { listenMs: 0, utterances: 0, words: 0, drops: 0, asrMsSum: 0, asrN: 0 },
   note: "",               // transient footer note
   noteUntil: 0,
-  swyd: { state: "unknown", busy: false }, // Tesla terminal viewer (~/swyd)
+  airc: { state: "unknown", busy: false }, // Tesla terminal viewer (~/airc)
 };
 
-// ---------- swyd (Tesla terminal viewer, a sibling project) ----------
-// ~/swyd serves the tmux session to the car over an ngrok tunnel. dais-top
+// ---------- airc (Tesla terminal viewer, a sibling project) ----------
+// ~/airc serves the tmux session to the car over an ngrok tunnel. dais-top
 // only shells out to its toggle tool: a badge while broadcasting (it IS a
 // public URL — worth a loud indicator), w to flip. Hidden when absent.
-const SWYD = process.env.DAIS_SWYD ??
-  path.join(os.homedir(), "swyd", "tools", "swyd");
+const AIRC = process.env.DAIS_AIRC ??
+  path.join(os.homedir(), "airc", "tools", "airc");
 
-function pollSwyd() {
-  if (S.swyd.busy || S.swyd.state === "missing") return;
-  execFile(SWYD, ["status", "--json"], { timeout: 4000 }, (err, stdout) => {
-    if (err && err.code === "ENOENT") { S.swyd.state = "missing"; return; }
-    try { S.swyd.state = JSON.parse(stdout).active ? "on" : "off"; }
+function pollAirc() {
+  if (S.airc.busy || S.airc.state === "missing") return;
+  execFile(AIRC, ["status", "--json"], { timeout: 4000 }, (err, stdout) => {
+    if (err && err.code === "ENOENT") { S.airc.state = "missing"; return; }
+    try { S.airc.state = JSON.parse(stdout).active ? "on" : "off"; }
     catch { /* transient — keep the previous state */ }
   });
 }
 
-function toggleSwyd() {
-  if (S.swyd.state === "missing") return note("swyd tool not found");
-  if (S.swyd.busy) return;
-  const turningOn = S.swyd.state !== "on";
-  S.swyd.busy = true;
-  note(turningOn ? "swyd: starting (tunnel may take a few seconds)…" : "swyd: stopping…");
-  execFile(SWYD, [turningOn ? "on" : "off"], { timeout: 30000 }, (err, stdout, stderr) => {
-    S.swyd.busy = false;
+function toggleAirc() {
+  if (S.airc.state === "missing") return note("airc tool not found");
+  if (S.airc.busy) return;
+  const turningOn = S.airc.state !== "on";
+  S.airc.busy = true;
+  note(turningOn ? "airc: starting (tunnel may take a few seconds)…" : "airc: stopping…");
+  execFile(AIRC, [turningOn ? "on" : "off"], { timeout: 30000 }, (err, stdout, stderr) => {
+    S.airc.busy = false;
     const line = String(err ? (stderr || stdout) : stdout).split("\n")[0]?.trim();
-    note(line || (err ? "swyd: failed" : "swyd: ok"));
-    pollSwyd();
+    note(line || (err ? "airc: failed" : "airc: ok"));
+    pollAirc();
   });
 }
 
@@ -499,12 +499,12 @@ function render() {
       : S.execution === "live" ? `${C.bold}${C.green}live${C.reset}`
       : `${C.dim}${S.execution}${C.reset}`);
   const mutedBadge = S.muted ? ` ${C.bgOrange} 🔇 MUTED ${C.reset}` : "";
-  // Broadcasting badge: while swyd is on, the terminal is on a public URL.
-  const swydStr = S.swyd.busy ? `  ${C.dim}swyd ⋯${C.reset}`
-    : S.swyd.state === "on" ? `  ${C.bgCyan} SWYD ${C.reset}`
-    : S.swyd.state === "off" ? `  ${C.dim}swyd –${C.reset}` : "";
+  // Broadcasting badge: while airc is on, the terminal is on a public URL.
+  const aircStr = S.airc.busy ? `  ${C.dim}airc ⋯${C.reset}`
+    : S.airc.state === "on" ? `  ${C.bgCyan} AIRC ${C.reset}`
+    : S.airc.state === "off" ? `  ${C.dim}airc –${C.reset}` : "";
   const title = C.title ? C.title() : `${C.bold}dais${C.reset}`;
-  lines.push(` ${title} ${modeBadge()}${mutedBadge}  ${targetStr}   ${right}${swydStr}`);
+  lines.push(` ${title} ${modeBadge()}${mutedBadge}  ${targetStr}   ${right}${aircStr}`);
   lines.push(sep);
 
   // mic meter — a two-row mirrored waveform while VAD is live
@@ -642,7 +642,7 @@ function helpBody(w) {
   L.push(key("d", "toggle dry-run (route & show, don't deliver)"));
   L.push(key("e", "cycle enter-mode"));
   L.push(key("s", "cycle router strategy"));
-  L.push(key("w", "toggle swyd (Tesla terminal viewer — public tunnel!)"));
+  L.push(key("w", "toggle airc (Tesla terminal viewer — public tunnel!)"));
   L.push(key("c", `color theme: ${THEME_ORDER.join(" → ")} (now ${theme})`));
   L.push(key("q", "quit"));
   const hd = S.help;
@@ -705,7 +705,7 @@ function onKey(key) {
   } else if (key === "s") {
     const next = cycle(STRATEGIES, S.strategy);
     request({ op: "settings", strategy: next }, ack(`router: ${next}`));
-  } else if (key === "w") toggleSwyd();
+  } else if (key === "w") toggleAirc();
   else if (key === "c") cycleTheme();
   else if (key === "\x1b") request({ op: "control", action: "esc" }, ack("escape sent"));
   else if (key === "\t") request({ op: "target", action: "next-live" }, ack("next live target"));
@@ -822,9 +822,9 @@ function main() {
       if (tg?.ok) { S.targets = tg.targets ?? {}; S.activeSlot = tg.active_slot; }
     });
   }, 1500);
-  // swyd is independent of the daemon; a slow poll keeps the badge honest.
-  pollSwyd();
-  setInterval(pollSwyd, 5000);
+  // airc is independent of the daemon; a slow poll keeps the badge honest.
+  pollAirc();
+  setInterval(pollAirc, 5000);
 }
 
 main();
