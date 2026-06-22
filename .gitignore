@@ -6,5 +6,6 @@ ear/.pixi/
 __pycache__/
 node_modules/
 *.wav
-.claude/
+.claude/*
+!.claude/skills/
 *.sw?
