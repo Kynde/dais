@@ -235,3 +235,18 @@ first (tmux pane for typing, `focus` for window-manager chords).
 [ -f "$XDG_RUNTIME_DIR/dais/muted" ]          && echo "🔇"
 [ -f "$XDG_RUNTIME_DIR/dais/dry-run" ]         && echo "DRY"
 ```
+
+## zsh completion
+
+`tools/_dais-ctl` completes every verb, the `target`/`set` sub-actions, and the
+`enter-mode`/`strategy`/`language` value sets. Slots (`target use|set|pick`),
+tmux panes (`target set`), and `replay` trace ids are read live — slots from the
+durable overlay (`$DAIS_STATE_DIR`, default `~/.local/state/dais/targets.edn`)
+falling back to `config/dais.edn`, traces from the event log. Symlink it onto
+your `$fpath` and restart zsh:
+
+```sh
+ln -s "$PWD/tools/_dais-ctl" ~/.zsh/completion/_dais-ctl   # a dir on your $fpath
+```
+
+Keep it in sync with `buildRequest()` in `dais-ctl` when verbs change.

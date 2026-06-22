@@ -1,0 +1,189 @@
+#compdef dais-ctl
+# zsh completion for dais-ctl (tools/dais-ctl). Keep in sync with the verbs in
+# that script's buildRequest() and usage block.
+# Install: symlink into a dir on $fpath, e.g.
+#   ln -s ~/dais/tools/_dais-ctl ~/.zsh/completion/_dais-ctl
+# then restart zsh (or: rm -f ~/.zcompdump*; compinit).
+
+# Repo root from the resolved dais-ctl exe (tools/dais-ctl -> tools -> repo),
+# so live reads work no matter where the symlink lives on $PATH.
+_dais_ctl_repo() {
+  local exe=${commands[dais-ctl]:-}
+  [[ -z $exe && $words[1] == */* ]] && exe=$words[1]
+  [[ -n $exe ]] || return 1
+  print -r -- ${exe:A:h:h}
+}
+
+# Target slots, read live. The durable overlay (~/.local/state/dais, set via
+# $DAIS_STATE_DIR) shadows config wholesale, so prefer it; fall back to
+# config/dais.edn ($DAIS_CONFIG override). Each slot is annotated with its
+# type and pane so the menu mirrors `dais-ctl target list`.
+_dais_ctl_slots() {
+  local repo=$(_dais_ctl_repo)
+  local overlay=${DAIS_STATE_DIR:-$HOME/.local/state/dais}/targets.edn
+  local src=$overlay
+  [[ -r $src ]] || src=${DAIS_CONFIG:-$repo/config/dais.edn}
+  [[ -r $src ]] || return 1
+
+  local flat=$(tr -d '\n' < $src)
+  local -a entries=( ${(f)"$(print -r -- $flat | grep -oE '[0-9]+[[:space:]]*\{:type[^}]*\}')"} )
+  local -a slots=()
+  local e slot type pane
+  for e in $entries; do
+    slot=${e%%[^0-9]*}
+    type=$(print -r -- $e | grep -oE ':type[[:space:]]+:[a-z]+'); type=${type##*:}
+    pane=$(print -r -- $e | grep -oE ':pane[[:space:]]+"[^"]*"'); pane=${pane#*\"}; pane=${pane%\"}
+    slots+=( "${slot}:${type}${pane:+ $pane}" )
+  done
+  (( ${#slots} )) && _describe -t slots 'target slot' slots
+}
+
+# tmux panes for `target set <slot> <pane>` — same session:window.pane shape
+# dais-ctl expects, plus the two pseudo-targets. Panes go through compadd, not
+# _describe: their names carry colons, which _describe would split off as a
+# description.
+_dais_ctl_panes() {
+  local -a special=(
+    'focus:deliver to the focused app via ydotool'
+    'current:the pane that is current right now'
+  )
+  _describe -t special 'pseudo-target' special
+  if (( $+commands[tmux] )); then
+    local -a panes=( ${(f)"$(tmux list-panes -a -F '#{session_name}:#{window_index}.#{pane_index}' 2>/dev/null)"} )
+    (( ${#panes} )) && _wanted panes expl 'tmux pane' compadd -a panes
+  fi
+}
+
+# Recent trace_ids from the event log for `replay`.
+_dais_ctl_traces() {
+  local repo=$(_dais_ctl_repo)
+  local dir=${DAIS_EVENTS_DIR:-$repo/events}
+  [[ -d $dir ]] || return 1
+  local -a traces=( ${(f)"$(grep -hoE '"trace_id":"[^"]+"' $dir/*.jsonl(N) 2>/dev/null | grep -oE '[0-9a-f-]{36}' | tail -50 | awk '!seen[$0]++')"} )
+  (( ${#traces} )) && _describe -t traces 'trace id' traces
+}
+
+_dais_ctl() {
+  local curcontext=$curcontext state line
+  typeset -A opt_args
+
+  local -a subcommands=(
+    'status:show daemon status'
+    'inject:feed a fake transcript into the router'
+    'brief:deliver the voice-input briefing (pointer, or --full text)'
+    'vad:toggle the VAD session (F9)'
+    'rec:toggle the manual record latch (F10)'
+    'esc:send Escape to the target (F11)'
+    'off:force voice off'
+    'arm:next utterance must be a command'
+    'mute:warm pause: drop utterances until unmute'
+    'unmute:resume after a mute'
+    'dry-run:toggle dry-run (route & plan, do not deliver)'
+    'target:manage delivery target slots'
+    'set:change a session setting (enter-mode/strategy/language)'
+    'events:print the last N events'
+    'replay:re-run a trace by id'
+    'shutdown:stop the daemon'
+  )
+
+  _arguments -C \
+    '1:command:->command' \
+    '*::arg:->args'
+
+  case $state in
+    command) _describe -t commands 'dais-ctl command' subcommands ;;
+    args)
+      case ${line[1]} in
+        target)
+          local -a target_actions=(
+            'set:point a slot at a pane/focus/current'
+            'use:make a slot active'
+            'next:cycle to the next slot'
+            'prev:cycle to the previous slot'
+            'next-live:next deliverable slot (skips dead targets)'
+            'list:list configured slots'
+            'panes:list all tmux panes (annotated)'
+            'pick:fzf-pick a pane into a slot'
+          )
+          _arguments -C \
+            '1:action:->taction' \
+            '*::targ:->targs'
+          case $state in
+            taction) _describe -t actions 'target action' target_actions ;;
+            targs)
+              case ${line[1]} in
+                set)
+                  _arguments \
+                    '1:slot:_dais_ctl_slots' \
+                    '2:pane:_dais_ctl_panes'
+                  ;;
+                use)  _arguments '1:slot:_dais_ctl_slots' ;;
+                pick) _arguments '1:slot (default active):_dais_ctl_slots' ;;
+              esac
+              ;;
+          esac
+          ;;
+        set)
+          _arguments -C \
+            '1:key:->skey' \
+            '2:value:->sval'
+          case $state in
+            skey)
+              local -a keys=(
+                'enter-mode:dictation submit behavior'
+                'strategy:how an utterance is classified'
+                'language:transcription language'
+              )
+              _describe -t keys 'setting' keys
+              ;;
+            sval)
+              local -a values
+              case ${line[1]} in
+                enter-mode)
+                  values=(
+                    'no-enter:type, never press Enter'
+                    'enter-auto:press Enter when the utterance looks complete'
+                    'enter-always:always press Enter'
+                  )
+                  ;;
+                strategy)
+                  values=(
+                    'whole-match:command iff the whole utterance matches'
+                    'prefix:commands must start with the prefix word'
+                    'key-armed:everything is dictation unless armed'
+                  )
+                  ;;
+                language)
+                  values=(
+                    'en:English'
+                    'fi:Finnish'
+                    'auto:autodetect (needs a multilingual model)'
+                  )
+                  ;;
+              esac
+              (( ${#values} )) && _describe -t values "${line[1]}" values
+              ;;
+          esac
+          ;;
+        brief)
+          _arguments '1:option:(--full)'
+          ;;
+        replay)
+          _arguments '1:trace id:_dais_ctl_traces'
+          ;;
+        events)
+          _message -e count 'number of events (default 20)'
+          ;;
+        inject)
+          _message -e text 'transcript text'
+          ;;
+      esac
+      ;;
+  esac
+}
+
+if [[ $funcstack[1] = _dais_ctl ]]; then
+  _dais_ctl "$@"
+else
+  compdef _dais_ctl dais-ctl
+fi
